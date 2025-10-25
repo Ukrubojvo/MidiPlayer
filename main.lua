@@ -88,6 +88,9 @@ local sustain = false
 local auto_sustain_enabled = false
 local no_note_off_enabled = false
 local random_note_enabled = false
+local deblack_enabled = false
+local deblack_level = 35
+local deblack_strict = true
 local shift = false
 local ctrl = false
 local active_notes = {}
@@ -100,6 +103,7 @@ local pause_position = 0
 local total_duration = 0
 local midi_files = {}
 local playback_speed = 1.0
+local midi_loaded = false
 
 local folder_name = "MIDI"
 
@@ -141,6 +145,85 @@ local function calculate_realtime_position(ticks, ticks_per_beat, tempo_changes)
     current_time_ms = current_time_ms + (remaining_ticks * current_tempo / 1000) / ticks_per_beat
     
     return current_time_ms / 1000
+end
+
+local function apply_deblack(parsed_events)
+    if not deblack_enabled then
+        return {table.unpack(parsed_events)}
+    end
+
+    local note_on_times = {}
+    local last_note_off = {}
+    local keep_indexes = {}
+
+    for i = 1, #parsed_events do
+        local note = parsed_events[i]
+        
+        -- abs_time이 없거나 유효하지 않은 이벤트는 모두 유지
+        if not note.abs_time or type(note.abs_time) ~= "number" then
+            keep_indexes[i] = true
+            continue
+        end
+        
+        -- control 이벤트는 항상 유지
+        if note.type == "control" then
+            keep_indexes[i] = true
+            continue
+        end
+        
+        -- channel이나 note가 없는 이벤트도 유지
+        if not note.channel or not note.note then
+            keep_indexes[i] = true
+            continue
+        end
+
+        local key = tostring(note.channel) .. ":" .. tostring(note.note)
+        
+        if note.vel and note.vel > 0 then -- Note On
+            local should_ignore = false
+
+            if deblack_strict then
+                local prev_off = last_note_off[key]
+                if prev_off and prev_off.t and prev_off.v and type(prev_off.t) == "number" then
+                    local dt = note.abs_time - prev_off.t
+                    local vel_diff = math.abs(note.vel - prev_off.v)
+                    if dt < 0.035 and vel_diff < 7 then
+                        should_ignore = true
+                    end
+                end
+            end
+
+            if not should_ignore then
+                note_on_times[key] = { t = note.abs_time, idx = i, v = note.vel }
+            end
+        else -- Note Off
+            local on_data = note_on_times[key]
+            if on_data and on_data.t and on_data.v and type(on_data.t) == "number" then
+                local dt = (note.abs_time - on_data.t) * 1000
+                local vel = on_data.v
+
+                last_note_off[key] = { t = note.abs_time, v = vel }
+                note_on_times[key] = nil
+
+                if not (vel <= (deblack_level * 4 / 5) and dt < 20) then
+                    keep_indexes[on_data.idx] = true
+                    keep_indexes[i] = true
+                end
+            else
+                -- on_data가 없는 note off는 유지
+                keep_indexes[i] = true
+            end
+        end
+    end
+
+    local filtered_events = {}
+    for i = 1, #parsed_events do
+        if keep_indexes[i] then
+            table.insert(filtered_events, parsed_events[i])
+        end
+    end
+
+    return filtered_events
 end
 
 local function parse_midi_improved(data)
@@ -319,6 +402,8 @@ local function parse_midi_improved(data)
 
     table.sort(parsed_events, function(a, b) return a.abs_time < b.abs_time end)
     
+    parsed_events = apply_deblack(parsed_events)
+    
     return parsed_events, tempo_changes
 end
 
@@ -424,6 +509,7 @@ local function start_playback(parsed_events, tempo_changes)
     pause_position = 0
     release_all_keys_except_spacebar()
     paused = false
+    midi_loaded = true
 end
 
 local function pause_playback()
@@ -579,10 +665,23 @@ list_button.Font = Enum.Font.Gotham
 local list_corner = Instance.new("UICorner", list_button)
 list_corner.CornerRadius = UDim.new(0, 8)
 
+local deblack_button = Instance.new("TextButton", frame)
+deblack_button.Size = UDim2.new(0, 100, 0, 35)
+deblack_button.Position = UDim2.new(0, 15, 0, 115)
+deblack_button.Text = "🎵 Deblack: OFF"
+deblack_button.TextScaled = false
+deblack_button.TextSize = 14
+deblack_button.BackgroundColor3 = Color3.fromRGB(200, 80, 80)
+deblack_button.TextColor3 = Color3.fromRGB(255, 255, 255)
+deblack_button.Font = Enum.Font.Gotham
+
+local deblack_corner = Instance.new("UICorner", deblack_button)
+deblack_corner.CornerRadius = UDim.new(0, 8)
+
 local auto_sustain_button = Instance.new("TextButton", frame)
-auto_sustain_button.Size = UDim2.new(0, 140, 0, 35)
-auto_sustain_button.Position = UDim2.new(0, 15, 0, 115)
-auto_sustain_button.Text = "🔄 Auto Sustain: ON"
+auto_sustain_button.Size = UDim2.new(0, 110, 0, 35)
+auto_sustain_button.Position = UDim2.new(0, 125, 0, 115)
+auto_sustain_button.Text = "🔄 AutoSus: ON"
 auto_sustain_button.TextScaled = false
 auto_sustain_button.TextSize = 14
 auto_sustain_button.BackgroundColor3 = Color3.fromRGB(50, 150, 80)
@@ -593,10 +692,9 @@ local auto_corner = Instance.new("UICorner", auto_sustain_button)
 auto_corner.CornerRadius = UDim.new(0, 8)
 
 local random_note_button = Instance.new("TextButton", frame)
-random_note_button.Size = UDim2.new(0, 140, 0, 35)
-random_note_button.Position = UDim2.new(0.5, 0, 0, 115)
-random_note_button.AnchorPoint = Vector2.new(0.5, 0)
-random_note_button.Text = "🎲 RandomNote: OFF"
+random_note_button.Size = UDim2.new(0, 110, 0, 35)
+random_note_button.Position = UDim2.new(0, 235, 0, 115)
+random_note_button.Text = "🎲 Random: OFF"
 random_note_button.TextScaled = false
 random_note_button.TextSize = 14
 random_note_button.BackgroundColor3 = Color3.fromRGB(200, 80, 80)
@@ -607,9 +705,9 @@ local random_off_corner = Instance.new("UICorner", random_note_button)
 random_off_corner.CornerRadius = UDim.new(0, 8)
 
 local no_note_off_button = Instance.new("TextButton", frame)
-no_note_off_button.Size = UDim2.new(0, 140, 0, 35)
-no_note_off_button.Position = UDim2.new(1, -155, 0, 115)
-no_note_off_button.Text = "🎹 NoNoteOff: OFF"
+no_note_off_button.Size = UDim2.new(0, 110, 0, 35)
+no_note_off_button.Position = UDim2.new(1, -125, 0, 115)
+no_note_off_button.Text = "🎹 NoOff: OFF"
 no_note_off_button.TextScaled = false
 no_note_off_button.TextSize = 14
 no_note_off_button.BackgroundColor3 = Color3.fromRGB(200, 80, 80)
@@ -787,16 +885,43 @@ local function update_time_label()
     end
 end
 
+local function update_deblack_button_state()
+    if midi_loaded then
+        deblack_button.BackgroundColor3 = Color3.fromRGB(100, 100, 100)
+        deblack_button.TextColor3 = Color3.fromRGB(150, 150, 150)
+    else
+        if deblack_enabled then
+            deblack_button.BackgroundColor3 = Color3.fromRGB(50, 150, 80)
+            deblack_button.TextColor3 = Color3.fromRGB(255, 255, 255)
+        else
+            deblack_button.BackgroundColor3 = Color3.fromRGB(200, 80, 80)
+            deblack_button.TextColor3 = Color3.fromRGB(255, 255, 255)
+        end
+    end
+end
+
+deblack_button.MouseButton1Click:Connect(function()
+    if not midi_loaded then
+        deblack_enabled = not deblack_enabled
+        if deblack_enabled then
+            deblack_button.Text = "🎵 Deblack: ON"
+        else
+            deblack_button.Text = "🎵 Deblack: OFF"
+        end
+        update_deblack_button_state()
+    end
+end)
+
 auto_sustain_button.MouseButton1Click:Connect(function()
     auto_sustain_enabled = not auto_sustain_enabled
     if auto_sustain_enabled then
-        auto_sustain_button.Text = "🔄 Auto Sustain: OFF"
+        auto_sustain_button.Text = "🔄 AutoSus: OFF"
         auto_sustain_button.BackgroundColor3 = Color3.fromRGB(200, 80, 80)
         vim:SendKeyEvent(false, Enum.KeyCode.Space, false, game)
         sustain = false
         release_all_keys_except_spacebar()
     else
-        auto_sustain_button.Text = "🔄 Auto Sustain: ON"
+        auto_sustain_button.Text = "🔄 AutoSus: ON"
         auto_sustain_button.BackgroundColor3 = Color3.fromRGB(50, 150, 80)
         vim:SendKeyEvent(true, Enum.KeyCode.Space, false, game)
         sustain = true
@@ -806,11 +931,11 @@ end)
 random_note_button.MouseButton1Click:Connect(function()
     random_note_enabled = not random_note_enabled
     if random_note_enabled then
-        random_note_button.Text = "🎲 RandomNote: ON"
+        random_note_button.Text = "🎲 Random: ON"
         random_note_button.BackgroundColor3 = Color3.fromRGB(50, 150, 80)
         release_all_keys_except_spacebar()
     else
-        random_note_button.Text = "🎲 RandomNote: OFF"
+        random_note_button.Text = "🎲 Random: OFF"
         random_note_button.BackgroundColor3 = Color3.fromRGB(200, 80, 80)
         release_all_keys_except_spacebar()
     end
@@ -819,11 +944,11 @@ end)
 no_note_off_button.MouseButton1Click:Connect(function()
     no_note_off_enabled = not no_note_off_enabled
     if no_note_off_enabled then
-        no_note_off_button.Text = "🎹 NoNoteOff: ON"
+        no_note_off_button.Text = "🎹 NoOff: ON"
         no_note_off_button.BackgroundColor3 = Color3.fromRGB(50, 150, 80)
         release_all_keys_except_spacebar()
     else
-        no_note_off_button.Text = "🎹 NoNoteOff: OFF"
+        no_note_off_button.Text = "🎹 NoOff: OFF"
         no_note_off_button.BackgroundColor3 = Color3.fromRGB(200, 80, 80)
         release_all_keys_except_spacebar()
     end
@@ -975,13 +1100,17 @@ local function on_midi_data_received(data)
     
     local parsed_events, tempo_changes = parse_midi_improved(data)
     if parsed_events and #parsed_events > 0 then 
-        start_playback(parsed_events, tempo_changes) 
+        start_playback(parsed_events, tempo_changes)
+        update_deblack_button_state()
     else
         filename_box.Text = "Invalid MIDI file"
     end
 end
 
 load_button.MouseButton1Click:Connect(function()
+    midi_loaded = false
+    update_deblack_button_state()
+    
     local ok, data = pcall(readfile, "./MIDI/" .. filename_box.Text)
     if ok then 
         on_midi_data_received(data) 
@@ -1023,6 +1152,8 @@ stop_button.MouseButton1Click:Connect(function()
     stop_playback()
     handle.Position = UDim2.new(0, -8, 0.5, -12)
     update_time_label()
+    midi_loaded = false
+    update_deblack_button_state()
 end)
 
 list_button.MouseButton1Click:Connect(function()
@@ -1038,4 +1169,5 @@ uis.InputBegan:Connect(function(input, game_processed)
     end
 end)
 
+update_deblack_button_state()
 disableAutoLocalize(screen_gui)
