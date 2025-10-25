@@ -1,5 +1,7 @@
 -- SUPPORT EXECUTOR : ALL
 -- MADE BY .antilua.
+-- OPTIMIZED VERSION
+
 local function missing(t, f, fallback)
     if type(f) == t then return f end
     return fallback
@@ -104,6 +106,7 @@ local total_duration = 0
 local midi_files = {}
 local playback_speed = 1.0
 local midi_loaded = false
+local is_loading = false
 
 local folder_name = "MIDI"
 
@@ -129,7 +132,8 @@ local function calculate_realtime_position(ticks, ticks_per_beat, tempo_changes)
     local current_time_ms = 0
     local current_tempo = 500000
     
-    for _, tempo_event in ipairs(tempo_changes) do
+    for i = 1, #tempo_changes do
+        local tempo_event = tempo_changes[i]
         if tempo_event.tick <= ticks then
             local tick_diff = tempo_event.tick - current_tick
             current_time_ms = current_time_ms + (tick_diff * current_tempo / 1000) / ticks_per_beat
@@ -149,84 +153,76 @@ end
 
 local function apply_deblack(parsed_events)
     if not deblack_enabled then
-        return {table.unpack(parsed_events)}
+        return parsed_events
     end
 
     local note_on_times = {}
     local last_note_off = {}
     local keep_indexes = {}
+    local n = #parsed_events
 
-    for i = 1, #parsed_events do
+    for i = 1, n do
         local note = parsed_events[i]
         
-        -- abs_time이 없거나 유효하지 않은 이벤트는 모두 유지
         if not note.abs_time or type(note.abs_time) ~= "number" then
             keep_indexes[i] = true
-            continue
-        end
-        
-        -- control 이벤트는 항상 유지
-        if note.type == "control" then
+        elseif note.type == "control" then
             keep_indexes[i] = true
-            continue
-        end
-        
-        -- channel이나 note가 없는 이벤트도 유지
-        if not note.channel or not note.note then
+        elseif not note.channel or not note.note then
             keep_indexes[i] = true
-            continue
-        end
+        else
+            local key = tostring(note.channel) .. ":" .. tostring(note.note)
+            
+            if note.vel and note.vel > 0 then
+                local should_ignore = false
 
-        local key = tostring(note.channel) .. ":" .. tostring(note.note)
-        
-        if note.vel and note.vel > 0 then -- Note On
-            local should_ignore = false
-
-            if deblack_strict then
-                local prev_off = last_note_off[key]
-                if prev_off and prev_off.t and prev_off.v and type(prev_off.t) == "number" then
-                    local dt = note.abs_time - prev_off.t
-                    local vel_diff = math.abs(note.vel - prev_off.v)
-                    if dt < 0.035 and vel_diff < 7 then
-                        should_ignore = true
+                if deblack_strict then
+                    local prev_off = last_note_off[key]
+                    if prev_off and prev_off.t and prev_off.v and type(prev_off.t) == "number" then
+                        local dt = note.abs_time - prev_off.t
+                        local vel_diff = math.abs(note.vel - prev_off.v)
+                        if dt < 0.035 and vel_diff < 7 then
+                            should_ignore = true
+                        end
                     end
                 end
-            end
 
-            if not should_ignore then
-                note_on_times[key] = { t = note.abs_time, idx = i, v = note.vel }
-            end
-        else -- Note Off
-            local on_data = note_on_times[key]
-            if on_data and on_data.t and on_data.v and type(on_data.t) == "number" then
-                local dt = (note.abs_time - on_data.t) * 1000
-                local vel = on_data.v
-
-                last_note_off[key] = { t = note.abs_time, v = vel }
-                note_on_times[key] = nil
-
-                if not (vel <= (deblack_level * 4 / 5) and dt < 20) then
-                    keep_indexes[on_data.idx] = true
-                    keep_indexes[i] = true
+                if not should_ignore then
+                    note_on_times[key] = { t = note.abs_time, idx = i, v = note.vel }
                 end
             else
-                -- on_data가 없는 note off는 유지
-                keep_indexes[i] = true
+                local on_data = note_on_times[key]
+                if on_data and on_data.t and on_data.v and type(on_data.t) == "number" then
+                    local dt = (note.abs_time - on_data.t) * 1000
+                    local vel = on_data.v
+
+                    last_note_off[key] = { t = note.abs_time, v = vel }
+                    note_on_times[key] = nil
+
+                    if not (vel <= (deblack_level * 4 / 5) and dt < 20) then
+                        keep_indexes[on_data.idx] = true
+                        keep_indexes[i] = true
+                    end
+                else
+                    keep_indexes[i] = true
+                end
             end
         end
     end
 
     local filtered_events = {}
-    for i = 1, #parsed_events do
+    local filtered_count = 0
+    for i = 1, n do
         if keep_indexes[i] then
-            table.insert(filtered_events, parsed_events[i])
+            filtered_count = filtered_count + 1
+            filtered_events[filtered_count] = parsed_events[i]
         end
     end
 
     return filtered_events
 end
 
-local function parse_midi_improved(data)
+local function parse_midi_improved(data, loading_label)
     local buffer = data
     local offset = 1
     local track_end_offset = 0
@@ -237,8 +233,18 @@ local function parse_midi_improved(data)
     local note_on_stack = {}
     local parsed_events = {}
     local tempo_changes = {{tick = 0, tempo = 500000}}
+    local event_count = 0
+    local last_yield = os.clock()
 
     while true do
+        if os.clock() - last_yield > 0.033 then
+            task.wait()
+            last_yield = os.clock()
+            if loading_label and loading_label.Parent then
+                loading_label.Text = string.format("⏳ Parsing... %d events", event_count)
+            end
+        end
+
         if not is_header_parsed then
             if #buffer < 14 then break end
             if string.sub(buffer, 1, 4) ~= 'MThd' then break end
@@ -297,21 +303,22 @@ local function parse_midi_improved(data)
                     if length_ticks > 0 then
                         local on_time = calculate_realtime_position(prev.on_tick, ticks_per_beat, tempo_changes)
                         local off_time = calculate_realtime_position(track_time, ticks_per_beat, tempo_changes)
-                        table.insert(parsed_events, {
+                        event_count = event_count + 2
+                        parsed_events[event_count - 1] = {
                             type = 'on',
                             note = prev.note_name,
                             vel = prev.velocity,
                             channel = prev.channel,
                             abs_time = on_time,
                             tick = prev.on_tick
-                        })
-                        table.insert(parsed_events, {
+                        }
+                        parsed_events[event_count] = {
                             type = 'off',
                             note = prev.note_name,
                             channel = prev.channel,
                             abs_time = off_time,
                             tick = track_time
-                        })
+                        }
                     end
                     note_on_stack[key] = nil
                 end
@@ -328,21 +335,22 @@ local function parse_midi_improved(data)
                     if length_ticks > 0 then
                         local on_time = calculate_realtime_position(prev.on_tick, ticks_per_beat, tempo_changes)
                         local off_time = calculate_realtime_position(track_time, ticks_per_beat, tempo_changes)
-                        table.insert(parsed_events, {
+                        event_count = event_count + 2
+                        parsed_events[event_count - 1] = {
                             type = 'on',
                             note = prev.note_name,
                             vel = prev.velocity,
                             channel = prev.channel,
                             abs_time = on_time,
                             tick = prev.on_tick
-                        })
-                        table.insert(parsed_events, {
+                        }
+                        parsed_events[event_count] = {
                             type = 'off',
                             note = prev.note_name,
                             channel = prev.channel,
                             abs_time = off_time,
                             tick = track_time
-                        })
+                        }
                     end
                     note_on_stack[key] = nil
                 end
@@ -355,12 +363,13 @@ local function parse_midi_improved(data)
             
             if controller_type == 64 then
                 local control_time = calculate_realtime_position(track_time, ticks_per_beat, tempo_changes)
-                table.insert(parsed_events, {
+                event_count = event_count + 1
+                parsed_events[event_count] = {
                     type = 'control',
                     vel = value,
                     abs_time = control_time,
                     tick = track_time
-                })
+                }
             end
         elseif status == 0xFF then
             local meta_type = string.byte(buffer, offset)
@@ -390,17 +399,28 @@ local function parse_midi_improved(data)
 
     for key, prev in pairs(note_on_stack) do
         local on_time = calculate_realtime_position(prev.on_tick, ticks_per_beat, tempo_changes)
-        table.insert(parsed_events, {
+        event_count = event_count + 1
+        parsed_events[event_count] = {
             type = 'on',
             note = prev.note_name,
             vel = prev.velocity,
             channel = prev.channel,
             abs_time = on_time,
             tick = prev.on_tick
-        })
+        }
     end
 
+    if loading_label and loading_label.Parent then
+        loading_label.Text = "⏳ Sorting events..."
+    end
+    task.wait()
+    
     table.sort(parsed_events, function(a, b) return a.abs_time < b.abs_time end)
+    
+    if loading_label and loading_label.Parent then
+        loading_label.Text = "⏳ Applying deblack..."
+    end
+    task.wait()
     
     parsed_events = apply_deblack(parsed_events)
     
@@ -664,6 +684,29 @@ list_button.Font = Enum.Font.Gotham
 
 local list_corner = Instance.new("UICorner", list_button)
 list_corner.CornerRadius = UDim.new(0, 8)
+
+local loading_overlay = Instance.new("Frame", frame)
+loading_overlay.Size = UDim2.new(1, 0, 1, 0)
+loading_overlay.Position = UDim2.new(0, 0, 0, 0)
+loading_overlay.BackgroundColor3 = Color3.fromRGB(0, 0, 0)
+loading_overlay.BackgroundTransparency = 0.5
+loading_overlay.BorderSizePixel = 0
+loading_overlay.Visible = false
+loading_overlay.ZIndex = 10
+
+local loading_corner = Instance.new("UICorner", loading_overlay)
+loading_corner.CornerRadius = UDim.new(0, 16)
+
+local loading_label = Instance.new("TextLabel", loading_overlay)
+loading_label.Size = UDim2.new(0.8, 0, 0, 50)
+loading_label.Position = UDim2.new(0.5, 0, 0.5, 0)
+loading_label.AnchorPoint = Vector2.new(0.5, 0.5)
+loading_label.Text = "⏳ Loading..."
+loading_label.TextSize = 24
+loading_label.TextColor3 = Color3.fromRGB(255, 255, 255)
+loading_label.BackgroundTransparency = 1
+loading_label.Font = Enum.Font.GothamBold
+loading_label.ZIndex = 11
 
 local deblack_button = Instance.new("TextButton", frame)
 deblack_button.Size = UDim2.new(0, 100, 0, 35)
@@ -1003,7 +1046,6 @@ speed_slider.InputBegan:Connect(function(input)
         end
         local x = input.Position.X - speed_slider.AbsolutePosition.X
         local ratio = math.clamp(x / speed_slider.AbsoluteSize.X, 0, 1)
-        local old_speed = playback_speed
         playback_speed = 0.5 + (ratio * 1.5)
         speed_handle.Position = UDim2.new(ratio, -8, 0.5, -12)
         speed_label.Text = string.format("⚡ Speed: %.2fx", playback_speed)
@@ -1030,7 +1072,6 @@ speed_slider.InputChanged:Connect(function(input)
         end
         local x = input.Position.X - speed_slider.AbsolutePosition.X
         local ratio = math.clamp(x / speed_slider.AbsoluteSize.X, 0, 1)
-        local old_speed = playback_speed
         playback_speed = 0.5 + (ratio * 1.5)
         speed_handle.Position = UDim2.new(ratio, -8, 0.5, -12)
         speed_label.Text = string.format("⚡ Speed: %.2fx", playback_speed)
@@ -1093,21 +1134,40 @@ local function populate_file_list()
 end
 
 local function on_midi_data_received(data)
-    if not data or #data < 14 or string.sub(data, 1, 4) ~= 'MThd' then
-        filename_box.Text = "Invalid MIDI file"
-        return
-    end
+    if is_loading then return end
+    is_loading = true
     
-    local parsed_events, tempo_changes = parse_midi_improved(data)
-    if parsed_events and #parsed_events > 0 then 
-        start_playback(parsed_events, tempo_changes)
-        update_deblack_button_state()
-    else
-        filename_box.Text = "Invalid MIDI file"
-    end
+    loading_overlay.Visible = true
+    loading_label.Text = "⏳ Loading..."
+    
+    task.spawn(function()
+        if not data or #data < 14 or string.sub(data, 1, 4) ~= 'MThd' then
+            loading_overlay.Visible = false
+            filename_box.Text = "Invalid MIDI file"
+            is_loading = false
+            return
+        end
+        
+        local parsed_events, tempo_changes = parse_midi_improved(data, loading_label)
+        
+        if parsed_events and #parsed_events > 0 then 
+            loading_label.Text = "✅ Loading complete!"
+            task.wait(0.5)
+            loading_overlay.Visible = false
+            start_playback(parsed_events, tempo_changes)
+            update_deblack_button_state()
+        else
+            loading_overlay.Visible = false
+            filename_box.Text = "Invalid MIDI file"
+        end
+        
+        is_loading = false
+    end)
 end
 
 load_button.MouseButton1Click:Connect(function()
+    if is_loading then return end
+    
     midi_loaded = false
     update_deblack_button_state()
     
@@ -1116,14 +1176,20 @@ load_button.MouseButton1Click:Connect(function()
         on_midi_data_received(data) 
     else
         if string.match(filename_box.Text, "^https?://") then
-            local success, result = pcall(function()
-                return game:HttpGet(filename_box.Text)
+            loading_overlay.Visible = true
+            loading_label.Text = "⏳ Downloading..."
+            
+            task.spawn(function()
+                local success, result = pcall(function()
+                    return game:HttpGet(filename_box.Text)
+                end)
+                if success and result then
+                    on_midi_data_received(result)
+                else
+                    loading_overlay.Visible = false
+                    filename_box.Text = "Download failed"
+                end
             end)
-            if success and result then
-                on_midi_data_received(result)
-            else
-                filename_box.Text = "Invalid MIDI file"
-            end
         else
             filename_box.Text = "File not found"
         end
