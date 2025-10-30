@@ -2,13 +2,43 @@
 -- MADE BY .antilua.
 -- OPTIMIZED VERSION
 
+assert(isfolder and makefolder, "Unable to create folder")
+local _xpcall, _pcall, _task, _math = xpcall, pcall, task, math
+if not isfolder("MIDI") then
+    makefolder("MIDI")
+    writefile("./MIDI/Summer.mid", game:HttpGetAsync("https://github.com/Ukrubojvo/api/raw/refs/heads/main/Summer.mid"))
+end
+
+if not shared.AntiLuaLoading then
+    shared.AntiLuaLoading = true
+else
+    return "Already Loaded"
+end
+
+local run = function(func)
+    _xpcall(func, function(err)
+        shared.AntiLuaLoading = false
+        warn(err)
+    end)
+end
+
+local WindUI
+run(function()
+    local ok, res = _pcall(function() return require("./src/Init") end)
+    if ok and res then
+        WindUI = res
+    else
+        WindUI = loadstring(game:HttpGetAsync("https://github.com/Footagesus/WindUI/releases/latest/download/main.lua"))()
+    end
+end)
+
 local function missing(t, f, fallback)
     if type(f) == t then return f end
     return fallback
 end
 
 local cloneref = missing("function", cloneref, function(...) return ... end)
-local service = setmetatable({}, {
+local Services = setmetatable({}, {
     __index = function(self, name)
         self[name] = cloneref(game:GetService(name))
         return self[name]
@@ -17,10 +47,10 @@ local service = setmetatable({}, {
 
 local oldgame = game
 local game = workspace.Parent
-local run_service = service.RunService
-local vim = service.VirtualInputManager
-local uis = service.UserInputService
-local players = service.Players
+local run_service = Services.RunService
+local vim = Services.VirtualInputManager
+local uis = Services.UserInputService
+local players = Services.Players
 local player = players.LocalPlayer
 
 local ProtectGui = protectgui or (syn and syn.protect_gui) or function() end
@@ -87,11 +117,12 @@ local current_tempo = 500000
 local current_time = 0
 local last_tick = 0
 local sustain = false
-local auto_sustain_enabled = false
+local key88_enabled = true
+local auto_sustain_enabled = true
 local no_note_off_enabled = false
 local random_note_enabled = false
 local deblack_enabled = false
-local deblack_level = 35
+local deblack_level = 65
 local deblack_strict = true
 local shift = false
 local ctrl = false
@@ -107,12 +138,13 @@ local midi_files = {}
 local playback_speed = 1.0
 local midi_loaded = false
 local is_loading = false
+local played_slider_ref
 
 local folder_name = "MIDI"
+if not isfolder(folder_name) then makefolder(folder_name) end
 
-if not isfolder(folder_name) then
-    makefolder(folder_name)
-end
+local ignore_played_slider_callback = false
+local ignore_speed_slider_callback = false
 
 local function read_var_int(data, offset)
     local value = 0
@@ -180,7 +212,7 @@ local function apply_deblack(parsed_events)
                     local prev_off = last_note_off[key]
                     if prev_off and prev_off.t and prev_off.v and type(prev_off.t) == "number" then
                         local dt = note.abs_time - prev_off.t
-                        local vel_diff = math.abs(note.vel - prev_off.v)
+                        local vel_diff = _math.abs(note.vel - prev_off.v)
                         if dt < 0.035 and vel_diff < 7 then
                             should_ignore = true
                         end
@@ -199,7 +231,7 @@ local function apply_deblack(parsed_events)
                     last_note_off[key] = { t = note.abs_time, v = vel }
                     note_on_times[key] = nil
 
-                    if not (vel <= (deblack_level * 4 / 5) and dt < 20) then
+                    if not (vel <= (deblack_level) and dt < 20) then
                         keep_indexes[on_data.idx] = true
                         keep_indexes[i] = true
                     end
@@ -238,7 +270,7 @@ local function parse_midi_improved(data, loading_label)
 
     while true do
         if os.clock() - last_yield > 0.033 then
-            task.wait()
+            _task.wait()
             last_yield = os.clock()
             if loading_label and loading_label.Parent then
                 loading_label.Text = string.format("⏳ Parsing... %d events", event_count)
@@ -413,21 +445,21 @@ local function parse_midi_improved(data, loading_label)
     if loading_label and loading_label.Parent then
         loading_label.Text = "⏳ Sorting events..."
     end
-    task.wait()
+    _task.wait()
     
     table.sort(parsed_events, function(a, b) return a.abs_time < b.abs_time end)
     
     if loading_label and loading_label.Parent then
         loading_label.Text = "⏳ Applying deblack..."
     end
-    task.wait()
+    _task.wait()
     
     parsed_events = apply_deblack(parsed_events)
     
     return parsed_events, tempo_changes
 end
 
-local function release_all_keys_except_spacebar()
+local function release_all_keys()
     for _, k in pairs(active_notes) do
         vim:SendKeyEvent(false, k.keycode, false, game)
     end
@@ -438,6 +470,10 @@ local function release_all_keys_except_spacebar()
     if shift then 
         vim:SendKeyEvent(false, Enum.KeyCode.LeftShift, false, game)
         shift = false 
+    end
+    if sustain then
+        vim:SendKeyEvent(false, Enum.KeyCode.Space, false, game)
+        sustain = false
     end
     active_notes = {}
 end
@@ -458,23 +494,23 @@ local function play_realtime_events()
         local ev = events[next_event_index]
         local event_time = ev.abs_time
         if ev.type == "off" and random_note_enabled then
-            local random_offset = (math.random(0,20) * 0.01)
+            local random_offset = (_math.random(0,15) * 0.01)
             event_time = ev.abs_time - random_offset
-            if event_time < 0 then
-                event_time = 0
-            end
+            if event_time < 0 then event_time = 0 end
         end
         if ev.type == "on" and random_note_enabled then
-            local random_offset = math.random(0, 10) * 0.01
+            local random_offset = _math.random(0, 5) * 0.01
             event_time = ev.abs_time - random_offset
-            if event_time < 0 then
-                event_time = 0
-            end
+            if event_time < 0 then event_time = 0 end
         end
         if event_time <= elapsed then
             if ev.type == "on" then
                 local k = key_map[ev.note]
                 if k then
+                    if not key88_enabled and k.ctrl then
+                        next_event_index = next_event_index + 1
+                        continue
+                    end
                     if k.ctrl and not ctrl then vim:SendKeyEvent(true, Enum.KeyCode.LeftControl, false, game); ctrl = true elseif not k.ctrl and ctrl then vim:SendKeyEvent(false, Enum.KeyCode.LeftControl, false, game); ctrl = false end
                     if k.shift and not shift then vim:SendKeyEvent(true, Enum.KeyCode.LeftShift, false, game); shift = true elseif not k.shift and shift then vim:SendKeyEvent(false, Enum.KeyCode.LeftShift, false, game); shift = false end
                     vim:SendKeyEvent(true, k.keycode, false, game)
@@ -496,14 +532,14 @@ local function play_realtime_events()
             elseif ev.type == "control" then
                 local s = ev.vel >= 64
                 if auto_sustain_enabled then
-                    if not sustain then 
-                        vim:SendKeyEvent(true, Enum.KeyCode.Space, false, game)
-                        sustain = true 
-                    end
-                else
                     if s ~= sustain then 
                         vim:SendKeyEvent(s, Enum.KeyCode.Space, false, game)
                         sustain = s 
+                    end
+                else
+                    if not sustain then 
+                        vim:SendKeyEvent(true, Enum.KeyCode.Space, false, game)
+                        sustain = true 
                     end
                 end
             end
@@ -514,9 +550,12 @@ local function play_realtime_events()
     end
 
     if next_event_index > #events then
+        paused = true
         start_time = 0
+        next_event_index = 1
+        pause_time = 0
         pause_position = 0
-        release_all_keys_except_spacebar()
+        release_all_keys()
     end
 end
 
@@ -527,7 +566,7 @@ local function start_playback(parsed_events, tempo_changes)
     start_time = os.clock()
     next_event_index = 1
     pause_position = 0
-    release_all_keys_except_spacebar()
+    release_all_keys()
     paused = false
     midi_loaded = true
 end
@@ -537,7 +576,7 @@ local function pause_playback()
         paused = true
         pause_time = os.clock()
         pause_position = (os.clock() - start_time) * playback_speed
-        release_all_keys_except_spacebar()
+        release_all_keys()
     end
 end
 
@@ -554,7 +593,7 @@ local function stop_playback()
     next_event_index = 1
     pause_time = 0
     pause_position = 0
-    release_all_keys_except_spacebar()
+    release_all_keys()
 end
 
 local function seek_to_position(ratio)
@@ -573,667 +612,449 @@ local function seek_to_position(ratio)
         start_time = os.clock() - (target_time / playback_speed)
     end
     
-    release_all_keys_except_spacebar()
+    release_all_keys()
 end
-
-local function disableAutoLocalize(obj)
-    if obj:IsA("GuiObject") then
-        obj.AutoLocalize = false
-    end
-    for _, child in ipairs(obj:GetChildren()) do
-        disableAutoLocalize(child)
-    end
-end
-
-local screen_gui = Instance.new("ScreenGui", GUIParent)
-screen_gui.Name = "MIDIPLAYERPRO"
-screen_gui.IgnoreGuiInset = true
-screen_gui.ResetOnSpawn = false
-
-local frame = Instance.new("Frame", screen_gui)
-frame.Size = UDim2.new(0, 480, 0, 350)
-frame.Position = UDim2.new(0.5,0,0.5,0)
-frame.BackgroundColor3 = Color3.fromRGB(16, 16, 16)
-frame.BorderSizePixel = 0
-frame.AnchorPoint = Vector2.new(0.5, 0.5)
-frame.Active = true
-frame.Draggable = true
-
-local main_corner = Instance.new("UICorner", frame)
-main_corner.CornerRadius = UDim.new(0, 16)
-
-local title_bar = Instance.new("Frame", frame)
-title_bar.Size = UDim2.new(1, 0, 0, 50)
-title_bar.Position = UDim2.new(0, 0, 0, 0)
-title_bar.BackgroundColor3 = Color3.fromRGB(25, 30, 40)
-title_bar.BorderSizePixel = 0
-title_bar.BackgroundTransparency = 1
-
-local title_corner = Instance.new("UICorner", title_bar)
-title_corner.CornerRadius = UDim.new(0, 12)
-
-local title_label = Instance.new("TextLabel", title_bar)
-title_label.Size = UDim2.new(1, -80, 1, 0)
-title_label.Position = UDim2.new(0.5, 0, 0.5, -18)
-title_label.AnchorPoint = Vector2.new(0.5, 0)
-title_label.Text = "MIDI Player Pro"
-title_label.TextColor3 = Color3.fromRGB(255, 255, 255)
-title_label.TextSize = 22
-title_label.BackgroundTransparency = 1
-title_label.Font = Enum.Font.Gotham
-title_label.TextXAlignment = Enum.TextXAlignment.Left
-
-local title_stroke = Instance.new("UIStroke", title_label)
-title_stroke.Thickness = 1
-title_stroke.Color = Color3.fromRGB(255, 255, 255)
-
-local close_button = Instance.new("TextButton", title_bar)
-close_button.Size = UDim2.new(0, 35, 0, 35)
-close_button.Position = UDim2.new(1, -45, 0.5, -17.5)
-close_button.Text = "×"
-close_button.TextColor3 = Color3.fromRGB(139, 139, 146)
-close_button.TextScaled = true
-close_button.BackgroundColor3 = Color3.fromRGB(200, 50, 50)
-close_button.BackgroundTransparency = 1
-close_button.Font = Enum.Font.Gotham
-
-local close_corner = Instance.new("UICorner", close_button)
-close_corner.CornerRadius = UDim.new(1, 0)
-
-local close_stroke = Instance.new("UIStroke", close_button)
-close_stroke.Thickness = 1
-close_stroke.Color = Color3.fromRGB(139, 139, 146)
-
-local filename_box = Instance.new("TextBox", frame)
-filename_box.Size = UDim2.new(1, -130, 0, 40)
-filename_box.Position = UDim2.new(0, 15, 0, 65)
-filename_box.PlaceholderText = "Enter MIDI file name or URL"
-filename_box.Text = ""
-filename_box.TextScaled = false
-filename_box.TextSize = 16
-filename_box.BackgroundColor3 = Color3.fromRGB(38, 38, 38)
-filename_box.TextColor3 = Color3.fromRGB(255, 255, 255)
-filename_box.Font = Enum.Font.Gotham
-filename_box.ClearTextOnFocus = false
-
-local filename_corner = Instance.new("UICorner", filename_box)
-filename_corner.CornerRadius = UDim.new(0, 8)
-
-local load_button = Instance.new("TextButton", frame)
-load_button.Size = UDim2.new(0, 50, 0, 40)
-load_button.Position = UDim2.new(1, -115, 0, 65)
-load_button.Text = "Load"
-load_button.TextScaled = false
-load_button.TextSize = 16
-load_button.BackgroundColor3 = Color3.fromRGB(50, 150, 80)
-load_button.TextColor3 = Color3.fromRGB(255, 255, 255)
-load_button.Font = Enum.Font.Gotham
-
-local load_corner = Instance.new("UICorner", load_button)
-load_corner.CornerRadius = UDim.new(0, 8)
-
-local list_button = Instance.new("TextButton", frame)
-list_button.Size = UDim2.new(0, 50, 0, 40)
-list_button.Position = UDim2.new(1, -60, 0, 65)
-list_button.Text = "List"
-list_button.TextScaled = false
-list_button.TextSize = 16
-list_button.BackgroundColor3 = Color3.fromRGB(100, 100, 200)
-list_button.TextColor3 = Color3.fromRGB(255, 255, 255)
-list_button.Font = Enum.Font.Gotham
-
-local list_corner = Instance.new("UICorner", list_button)
-list_corner.CornerRadius = UDim.new(0, 8)
-
-local loading_overlay = Instance.new("Frame", frame)
-loading_overlay.Size = UDim2.new(1, 0, 1, 0)
-loading_overlay.Position = UDim2.new(0, 0, 0, 0)
-loading_overlay.BackgroundColor3 = Color3.fromRGB(0, 0, 0)
-loading_overlay.BackgroundTransparency = 0.5
-loading_overlay.BorderSizePixel = 0
-loading_overlay.Visible = false
-loading_overlay.ZIndex = 10
-
-local loading_corner = Instance.new("UICorner", loading_overlay)
-loading_corner.CornerRadius = UDim.new(0, 16)
-
-local loading_label = Instance.new("TextLabel", loading_overlay)
-loading_label.Size = UDim2.new(0.8, 0, 0, 50)
-loading_label.Position = UDim2.new(0.5, 0, 0.5, 0)
-loading_label.AnchorPoint = Vector2.new(0.5, 0.5)
-loading_label.Text = "⏳ Loading..."
-loading_label.TextSize = 24
-loading_label.TextColor3 = Color3.fromRGB(255, 255, 255)
-loading_label.BackgroundTransparency = 1
-loading_label.Font = Enum.Font.GothamBold
-loading_label.ZIndex = 11
-
-local deblack_button = Instance.new("TextButton", frame)
-deblack_button.Size = UDim2.new(0, 100, 0, 35)
-deblack_button.Position = UDim2.new(0, 15, 0, 115)
-deblack_button.Text = "🎵 Deblack: OFF"
-deblack_button.TextScaled = false
-deblack_button.TextSize = 14
-deblack_button.BackgroundColor3 = Color3.fromRGB(200, 80, 80)
-deblack_button.TextColor3 = Color3.fromRGB(255, 255, 255)
-deblack_button.Font = Enum.Font.Gotham
-
-local deblack_corner = Instance.new("UICorner", deblack_button)
-deblack_corner.CornerRadius = UDim.new(0, 8)
-
-local auto_sustain_button = Instance.new("TextButton", frame)
-auto_sustain_button.Size = UDim2.new(0, 110, 0, 35)
-auto_sustain_button.Position = UDim2.new(0, 125, 0, 115)
-auto_sustain_button.Text = "🔄 AutoSus: ON"
-auto_sustain_button.TextScaled = false
-auto_sustain_button.TextSize = 14
-auto_sustain_button.BackgroundColor3 = Color3.fromRGB(50, 150, 80)
-auto_sustain_button.TextColor3 = Color3.fromRGB(255, 255, 255)
-auto_sustain_button.Font = Enum.Font.Gotham
-
-local auto_corner = Instance.new("UICorner", auto_sustain_button)
-auto_corner.CornerRadius = UDim.new(0, 8)
-
-local random_note_button = Instance.new("TextButton", frame)
-random_note_button.Size = UDim2.new(0, 110, 0, 35)
-random_note_button.Position = UDim2.new(0, 235, 0, 115)
-random_note_button.Text = "🎲 Random: OFF"
-random_note_button.TextScaled = false
-random_note_button.TextSize = 14
-random_note_button.BackgroundColor3 = Color3.fromRGB(200, 80, 80)
-random_note_button.TextColor3 = Color3.fromRGB(255, 255, 255)
-random_note_button.Font = Enum.Font.Gotham
-
-local random_off_corner = Instance.new("UICorner", random_note_button)
-random_off_corner.CornerRadius = UDim.new(0, 8)
-
-local no_note_off_button = Instance.new("TextButton", frame)
-no_note_off_button.Size = UDim2.new(0, 110, 0, 35)
-no_note_off_button.Position = UDim2.new(1, -125, 0, 115)
-no_note_off_button.Text = "🎹 NoOff: OFF"
-no_note_off_button.TextScaled = false
-no_note_off_button.TextSize = 14
-no_note_off_button.BackgroundColor3 = Color3.fromRGB(200, 80, 80)
-no_note_off_button.TextColor3 = Color3.fromRGB(255, 255, 255)
-no_note_off_button.Font = Enum.Font.Gotham
-
-local no_note_off_corner = Instance.new("UICorner", no_note_off_button)
-no_note_off_corner.CornerRadius = UDim.new(0, 8)
-
-local file_list_frame = Instance.new("ScrollingFrame", frame)
-file_list_frame.Size = UDim2.new(0, 160, 0, 200)
-file_list_frame.Position = UDim2.new(0, -160, 0, 0)
-file_list_frame.BackgroundColor3 = Color3.fromRGB(16, 16, 16)
-file_list_frame.BorderSizePixel = 0
-file_list_frame.CanvasSize = UDim2.new(0, 0, 0, 0)
-file_list_frame.ScrollBarThickness = 12
-file_list_frame.Visible = false
-
-local file_corner = Instance.new("UICorner", file_list_frame)
-file_corner.CornerRadius = UDim.new(0, 8)
-
-local file_list_layout = Instance.new("UIListLayout", file_list_frame)
-file_list_layout.SortOrder = Enum.SortOrder.LayoutOrder
-file_list_layout.Padding = UDim.new(0, 5)
-
-local button_container = Instance.new("Frame", frame)
-button_container.Size = UDim2.new(1, -30, 0, 50)
-button_container.Position = UDim2.new(0, 15, 0, 160)
-button_container.BackgroundTransparency = 1
-
-local button_layout = Instance.new("UIListLayout", button_container)
-button_layout.FillDirection = Enum.FillDirection.Horizontal
-button_layout.HorizontalAlignment = Enum.HorizontalAlignment.Center
-button_layout.Padding = UDim.new(0, 10)
-
-local play_button = Instance.new("TextButton", button_container)
-play_button.Size = UDim2.new(0, 90, 0, 45)
-play_button.Text = "Play"
-play_button.TextScaled = false
-play_button.TextSize = 16
-play_button.BackgroundColor3 = Color3.fromRGB(50, 150, 80)
-play_button.TextColor3 = Color3.fromRGB(255, 255, 255)
-play_button.Font = Enum.Font.Gotham
-
-local play_corner = Instance.new("UICorner", play_button)
-play_corner.CornerRadius = UDim.new(0, 8)
-
-local pause_button = Instance.new("TextButton", button_container)
-pause_button.Size = UDim2.new(0, 90, 0, 45)
-pause_button.Text = "Pause"
-pause_button.TextScaled = false
-pause_button.TextSize = 16
-pause_button.BackgroundColor3 = Color3.fromRGB(200, 150, 50)
-pause_button.TextColor3 = Color3.fromRGB(255, 255, 255)
-pause_button.Font = Enum.Font.Gotham
-
-local pause_corner = Instance.new("UICorner", pause_button)
-pause_corner.CornerRadius = UDim.new(0, 8)
-
-local stop_button = Instance.new("TextButton", button_container)
-stop_button.Size = UDim2.new(0, 90, 0, 45)
-stop_button.Text = "Stop"
-stop_button.TextScaled = false
-stop_button.TextSize = 16
-stop_button.BackgroundColor3 = Color3.fromRGB(200, 80, 80)
-stop_button.TextColor3 = Color3.fromRGB(255, 255, 255)
-stop_button.Font = Enum.Font.Gotham
-
-local stop_corner = Instance.new("UICorner", stop_button)
-stop_corner.CornerRadius = UDim.new(0, 8)
-
-local slider_container = Instance.new("Frame", frame)
-slider_container.Size = UDim2.new(1, -30, 0, 30)
-slider_container.Position = UDim2.new(0, 15, 0, 220)
-slider_container.BackgroundTransparency = 1
-
-local slider_bg = Instance.new("Frame", slider_container)
-slider_bg.Size = UDim2.new(1, 0, 0, 8)
-slider_bg.Position = UDim2.new(0, 0, 0.5, -4)
-slider_bg.BackgroundColor3 = Color3.fromRGB(30, 35, 45)
-
-local slider_bg_corner = Instance.new("UICorner", slider_bg)
-slider_bg_corner.CornerRadius = UDim.new(0, 4)
-
-local slider = Instance.new("TextButton", slider_container)
-slider.Size = UDim2.new(1, 0, 0, 8)
-slider.Position = UDim2.new(0, 0, 0.5, -4)
-slider.BackgroundColor3 = Color3.fromRGB(100, 150, 255)
-slider.Text = ""
-
-local slider_corner = Instance.new("UICorner", slider)
-slider_corner.CornerRadius = UDim.new(0, 4)
-
-local handle = Instance.new("Frame", slider)
-handle.Size = UDim2.new(0, 16, 0, 24)
-handle.Position = UDim2.new(0, -8, 0.5, -12)
-handle.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
-handle.BorderSizePixel = 0
-
-local handle_corner = Instance.new("UICorner", handle)
-handle_corner.CornerRadius = UDim.new(1, 0)
-
-local handle_stroke = Instance.new("UIStroke", handle)
-handle_stroke.Thickness = 2
-handle_stroke.Color = Color3.fromRGB(100, 150, 255)
-
-local speed_container = Instance.new("Frame", frame)
-speed_container.Size = UDim2.new(1, -30, 0, 30)
-speed_container.Position = UDim2.new(0, 15, 0, 260)
-speed_container.BackgroundTransparency = 1
-
-local speed_label = Instance.new("TextLabel", speed_container)
-speed_label.Size = UDim2.new(0, 100, 0, 20)
-speed_label.Position = UDim2.new(0, 0, 0.5, -10)
-speed_label.Text = "⚡ Speed: 1.00x"
-speed_label.TextScaled = false
-speed_label.TextSize = 14
-speed_label.BackgroundTransparency = 1
-speed_label.TextColor3 = Color3.fromRGB(255, 255, 255)
-speed_label.Font = Enum.Font.Gotham
-speed_label.TextXAlignment = Enum.TextXAlignment.Left
-
-local speed_slider_bg = Instance.new("Frame", speed_container)
-speed_slider_bg.Size = UDim2.new(1, -110, 0, 8)
-speed_slider_bg.Position = UDim2.new(0, 110, 0.5, -4)
-speed_slider_bg.BackgroundColor3 = Color3.fromRGB(30, 35, 45)
-
-local speed_bg_corner = Instance.new("UICorner", speed_slider_bg)
-speed_bg_corner.CornerRadius = UDim.new(0, 4)
-
-local speed_slider = Instance.new("TextButton", speed_container)
-speed_slider.Size = UDim2.new(1, -110, 0, 8)
-speed_slider.Position = UDim2.new(0, 110, 0.5, -4)
-speed_slider.BackgroundColor3 = Color3.fromRGB(150, 100, 255)
-speed_slider.Text = ""
-
-local speed_slider_corner = Instance.new("UICorner", speed_slider)
-speed_slider_corner.CornerRadius = UDim.new(0, 4)
-
-local speed_handle = Instance.new("Frame", speed_slider)
-speed_handle.Size = UDim2.new(0, 16, 0, 24)
-speed_handle.Position = UDim2.new(0.33, -8, 0.5, -12)
-speed_handle.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
-speed_handle.BorderSizePixel = 0
-
-local speed_handle_corner = Instance.new("UICorner", speed_handle)
-speed_handle_corner.CornerRadius = UDim.new(1, 0)
-
-local speed_handle_stroke = Instance.new("UIStroke", speed_handle)
-speed_handle_stroke.Thickness = 2
-speed_handle_stroke.Color = Color3.fromRGB(150, 100, 255)
-
-local time_label = Instance.new("TextLabel", frame)
-time_label.Size = UDim2.new(1, -30, 0, 25)
-time_label.Position = UDim2.new(0, 15, 0, 300)
-time_label.Text = "⏱ Time: 0.00 / 0.00"
-time_label.TextScaled = false
-time_label.TextSize = 14
-time_label.BackgroundTransparency = 1
-time_label.TextColor3 = Color3.fromRGB(200, 200, 200)
-time_label.Font = Enum.Font.Gotham
-time_label.TextXAlignment = Enum.TextXAlignment.Center
-
-local function update_time_label()
-    local elapsed = get_current_playback_position()
-    elapsed = math.max(0, elapsed)
-    
-    if total_duration > 0 then
-        local ratio = math.clamp(elapsed / total_duration, 0, 1)
-        handle.Position = UDim2.new(ratio, -8, 0.5, -12)
-        time_label.Text = string.format("⏱ Time: %.2f / %.2f", elapsed, total_duration)
-    else
-        handle.Position = UDim2.new(0, -8, 0.5, -12)
-        time_label.Text = string.format("⏱ Time: 0.00 / %.2f", total_duration)
-    end
-end
-
-local function update_deblack_button_state()
-    if midi_loaded then
-        deblack_button.BackgroundColor3 = Color3.fromRGB(100, 100, 100)
-        deblack_button.TextColor3 = Color3.fromRGB(150, 150, 150)
-    else
-        if deblack_enabled then
-            deblack_button.BackgroundColor3 = Color3.fromRGB(50, 150, 80)
-            deblack_button.TextColor3 = Color3.fromRGB(255, 255, 255)
-        else
-            deblack_button.BackgroundColor3 = Color3.fromRGB(200, 80, 80)
-            deblack_button.TextColor3 = Color3.fromRGB(255, 255, 255)
-        end
-    end
-end
-
-deblack_button.MouseButton1Click:Connect(function()
-    if not midi_loaded then
-        deblack_enabled = not deblack_enabled
-        if deblack_enabled then
-            deblack_button.Text = "🎵 Deblack: ON"
-        else
-            deblack_button.Text = "🎵 Deblack: OFF"
-        end
-        update_deblack_button_state()
-    end
-end)
-
-auto_sustain_button.MouseButton1Click:Connect(function()
-    auto_sustain_enabled = not auto_sustain_enabled
-    if auto_sustain_enabled then
-        auto_sustain_button.Text = "🔄 AutoSus: OFF"
-        auto_sustain_button.BackgroundColor3 = Color3.fromRGB(200, 80, 80)
-        vim:SendKeyEvent(false, Enum.KeyCode.Space, false, game)
-        sustain = false
-        release_all_keys_except_spacebar()
-    else
-        auto_sustain_button.Text = "🔄 AutoSus: ON"
-        auto_sustain_button.BackgroundColor3 = Color3.fromRGB(50, 150, 80)
-        vim:SendKeyEvent(true, Enum.KeyCode.Space, false, game)
-        sustain = true
-    end
-end)
-
-random_note_button.MouseButton1Click:Connect(function()
-    random_note_enabled = not random_note_enabled
-    if random_note_enabled then
-        random_note_button.Text = "🎲 Random: ON"
-        random_note_button.BackgroundColor3 = Color3.fromRGB(50, 150, 80)
-        release_all_keys_except_spacebar()
-    else
-        random_note_button.Text = "🎲 Random: OFF"
-        random_note_button.BackgroundColor3 = Color3.fromRGB(200, 80, 80)
-        release_all_keys_except_spacebar()
-    end
-end)
-
-no_note_off_button.MouseButton1Click:Connect(function()
-    no_note_off_enabled = not no_note_off_enabled
-    if no_note_off_enabled then
-        no_note_off_button.Text = "🎹 NoOff: ON"
-        no_note_off_button.BackgroundColor3 = Color3.fromRGB(50, 150, 80)
-        release_all_keys_except_spacebar()
-    else
-        no_note_off_button.Text = "🎹 NoOff: OFF"
-        no_note_off_button.BackgroundColor3 = Color3.fromRGB(200, 80, 80)
-        release_all_keys_except_spacebar()
-    end
-end)
-
-close_button.MouseButton1Click:Connect(function()
-    stop_playback()
-    screen_gui:Destroy()
-end)
-
-close_button.MouseEnter:Connect(function()
-    close_button.BackgroundColor3 = Color3.fromRGB(255, 80, 80)
-end)
-close_button.MouseLeave:Connect(function()
-    close_button.BackgroundColor3 = Color3.fromRGB(200, 50, 50)
-end)
-
-local dragging = false
-slider.InputBegan:Connect(function(input)
-    if input.UserInputType == Enum.UserInputType.MouseButton1 and total_duration > 0 then
-        dragging = true
-        release_all_keys_except_spacebar()
-        local x = input.Position.X - slider.AbsolutePosition.X
-        local ratio = math.clamp(x / slider.AbsoluteSize.X, 0, 1)
-        seek_to_position(ratio)
-        handle.Position = UDim2.new(ratio, -8, 0.5, -12)
-        update_time_label()
-    end
-end)
-slider.InputEnded:Connect(function(input)
-    if input.UserInputType == Enum.UserInputType.MouseButton1 then
-        dragging = false
-    end
-end)
-slider.InputChanged:Connect(function(input)
-    if dragging and input.UserInputType == Enum.UserInputType.MouseMovement and total_duration > 0 then
-        local x = input.Position.X - slider.AbsolutePosition.X
-        local ratio = math.clamp(x / slider.AbsoluteSize.X, 0, 1)
-        seek_to_position(ratio)
-        handle.Position = UDim2.new(ratio, -8, 0.5, -12)
-        update_time_label()
-    end
-end)
-
-local speed_dragging = false
-speed_slider.InputBegan:Connect(function(input)
-    if input.UserInputType == Enum.UserInputType.MouseButton1 then
-        speed_dragging = true
-        local was_playing = not paused
-        if was_playing then
-            pause_playback()
-        end
-        local x = input.Position.X - speed_slider.AbsolutePosition.X
-        local ratio = math.clamp(x / speed_slider.AbsoluteSize.X, 0, 1)
-        playback_speed = 0.5 + (ratio * 1.5)
-        speed_handle.Position = UDim2.new(ratio, -8, 0.5, -12)
-        speed_label.Text = string.format("⚡ Speed: %.2fx", playback_speed)
-        
-        if not paused and start_time > 0 then
-            local current_pos = get_current_playback_position()
-            start_time = os.clock() - (current_pos / playback_speed)
-        end
-        if was_playing then
-            resume_playback()
-        end
-    end
-end)
-speed_slider.InputEnded:Connect(function(input)
-    if input.UserInputType == Enum.UserInputType.MouseButton1 then
-        speed_dragging = false
-    end
-end)
-speed_slider.InputChanged:Connect(function(input)
-    if speed_dragging and input.UserInputType == Enum.UserInputType.MouseMovement then
-        local was_playing = not paused
-        if was_playing then
-            pause_playback()
-        end
-        local x = input.Position.X - speed_slider.AbsolutePosition.X
-        local ratio = math.clamp(x / speed_slider.AbsoluteSize.X, 0, 1)
-        playback_speed = 0.5 + (ratio * 1.5)
-        speed_handle.Position = UDim2.new(ratio, -8, 0.5, -12)
-        speed_label.Text = string.format("⚡ Speed: %.2fx", playback_speed)
-        
-        if not paused and start_time > 0 then
-            local current_pos = get_current_playback_position()
-            start_time = os.clock() - (current_pos / playback_speed)
-        end
-        if was_playing then
-            resume_playback()
-        end
-    end
-end)
-
-run_service.RenderStepped:Connect(function()
-    if not paused then
-        play_realtime_events()
-    end
-    update_time_label()
-end)
 
 local function list_midi_files()
     midi_files = {}
-    local success, files = pcall(listfiles, "./MIDI")
-    if success then
-        for _, file in ipairs(files) do
-            if file:match("%.mid$") then
-                table.insert(midi_files, file:match("[^/\\]+$"))
+    local ok, files = _pcall(listfiles, "./MIDI")
+    if ok and files then
+        for _, f in ipairs(files) do
+            if f:match("%.mid$") then
+                table.insert(midi_files, f:match("[^/\\]+$"))
             end
         end
     end
 end
 
-local function populate_file_list()
-    for _, child in ipairs(file_list_frame:GetChildren()) do
-        if child:IsA("TextButton") then child:Destroy() end
-    end
-    list_midi_files()
-    file_list_frame.CanvasSize = UDim2.new(0, 0, 0, #midi_files * 40)
-    for i, file in ipairs(midi_files) do
-        local button = Instance.new("TextButton", file_list_frame)
-        button.Size = UDim2.new(1, -10, 0, 35)
-        button.Position = UDim2.new(0, 5, 0, (i-1)*40)
-        button.Text = (#file > 17) and (file:sub(1, 17) .. "...") or file
-        button.TextSize = 14
-        button.TextScaled = false
-        button.AutoLocalize = false
-        button.TextColor3 = Color3.fromRGB(255, 255, 255)
-        button.BackgroundColor3 = Color3.fromRGB(38, 38, 38)
-        button.Font = Enum.Font.Gotham
-        
-        local file_button_corner = Instance.new("UICorner", button)
-        file_button_corner.CornerRadius = UDim.new(0, 6)
-        
-        button.MouseButton1Click:Connect(function()
-            filename_box.Text = file
-            file_list_frame.Visible = false
-        end)
-    end
-end
-
-local function on_midi_data_received(data)
+local function load_midi_from_data(data, ui_setter)
     if is_loading then return end
     is_loading = true
-    
-    loading_overlay.Visible = true
-    loading_label.Text = "⏳ Loading..."
-    
-    task.spawn(function()
-        if not data or #data < 14 or string.sub(data, 1, 4) ~= 'MThd' then
-            loading_overlay.Visible = false
-            filename_box.Text = "Invalid MIDI file"
+    ui_setter("⏳ Parsing MIDI...")
+
+    _task.spawn(function()
+        events = {}
+        tempo_events = {}
+        local ok, parsed, tempochg = _pcall(function() 
+            return parse_midi_improved(data, { Parent = true, Text = "" }) 
+        end)
+        
+        if not ok or not parsed then
+            ui_setter("❌ Invalid MIDI or parse error")
             is_loading = false
             return
         end
+
+        parsed = apply_deblack(parsed)
+
+        events = parsed
+        tempo_events = tempochg or {}
+        total_duration = events[#events] and events[#events].abs_time or 0
+        next_event_index = 1
+        pause_position = 0
+        paused = true
+        midi_loaded = true
+        is_loading = false
         
-        local parsed_events, tempo_changes = parse_midi_improved(data, loading_label)
-        
-        if parsed_events and #parsed_events > 0 then 
-            loading_label.Text = "✅ Loading complete!"
-            task.wait(0.5)
-            loading_overlay.Visible = false
-            start_playback(parsed_events, tempo_changes)
-            update_deblack_button_state()
-        else
-            loading_overlay.Visible = false
-            filename_box.Text = "Invalid MIDI file"
+        if played_slider_ref and total_duration > 0 then
+            played_slider_ref:SetMin(0)
+            played_slider_ref:SetMax(total_duration)
         end
         
-        is_loading = false
+        ui_setter("✅ Loaded " .. #events .. " events (" .. string.format("%.3f", total_duration) .. "s)")
     end)
 end
 
-load_button.MouseButton1Click:Connect(function()
-    if is_loading then return end
-    
-    midi_loaded = false
-    update_deblack_button_state()
-    
-    local ok, data = pcall(readfile, "./MIDI/" .. filename_box.Text)
-    if ok then 
-        on_midi_data_received(data) 
-    else
-        if string.match(filename_box.Text, "^https?://") then
-            loading_overlay.Visible = true
-            loading_label.Text = "⏳ Downloading..."
+run(function()
+    local Anonymous = false
+    local Window
+    Window = WindUI:CreateWindow({
+        Title = "MIDI Player",
+        Author = "Made by .antilua.",
+        Size = UDim2.fromOffset(600, 260),
+        SideBarWidth = 150,
+        Folder = "AntiLua",
+        NewElements = true,
+        HideSearchBar = true,
+        User = {
+            Enabled = true,
+            Anonymous = false,
+            Callback = function()
+                Anonymous = not Anonymous
+                Window.Icon:SetAnonymous(Anonymous)
+            end,
+        },
+    })
+
+    Window:OnDestroy(function()
+        shared.AntiLuaLoading = false
+        stop_playback()
+        release_all_keys()
+        events = {}
+        tempo_events = {}
+        midi_loaded = false
+        is_loading = false
+    end)
+
+    local MainTab = Window:Tab({ Title = "Main", Icon = "house", })
+    local SettingsTab = Window:Tab({ Title = "Settings", Icon = "settings", })
+
+    local status_label = MainTab:Paragraph({ Title = "Status", Desc = "Ready" })
+
+    list_midi_files()
+    local file_vals = {}
+    for _, f in ipairs(midi_files) do table.insert(file_vals, f) end
+
+    local selected_file = nil
+    local url_input_value = ""
+    local url_input = MainTab:Input({
+        Title = "URL or Filename",
+        Placeholder = "https:// or filename.mid",
+        Callback = function(val)
+            url_input_value = val
+        end
+    })
+
+    local file_dropdown = MainTab:Dropdown({
+        Title = "MIDI Files",
+        Desc = "Choose from ./MIDI",
+        Values = file_vals,
+        Value = midi_files[1] or nil,
+        Callback = function(option)
+            selected_file = option
+            url_input:Set(option)
+            status_label:SetDesc("Selected: " .. option)
+        end
+    })
+
+    MainTab:Button({
+        Title = "Load",
+        Callback = function()
+            if is_loading then 
+                status_label:SetDesc("Already loading...")
+                WindUI:Notify({
+                    Title = "MidiPlayer",
+                    Content = "Already loading...",
+                    Duration = 3,
+                    Icon = "bird",
+                })
+                return 
+            end
             
-            task.spawn(function()
-                local success, result = pcall(function()
-                    return game:HttpGet(filename_box.Text)
+            local load_source = nil
+            local txt = url_input_value or ""
+            
+            if txt ~= "" then
+                load_source = "url"
+            elseif selected_file then
+                txt = selected_file
+                load_source = "file"
+            else
+                status_label:SetDesc("❌ No file selected or URL entered")
+                WindUI:Notify({
+                    Title = "MidiPlayer",
+                    Content = "No file selected or URL entered",
+                    Duration = 3,
+                    Icon = "bird",
+                })
+                return
+            end
+            
+            if load_source == "url" and string.match(txt, "^https?://") then
+                status_label:SetDesc("⏳ Downloading...")
+                _task.spawn(function()
+                    local ok, body = _pcall(function() return game:HttpGet(txt) end)
+                    if ok and body then
+                        load_midi_from_data(body, function(txt) 
+                            status_label:SetDesc(txt)
+                            WindUI:Notify({
+                                Title = "MidiPlayer",
+                                Content = txt,
+                                Duration = 10,
+                                Icon = "bird",
+                            })
+                        end)
+                    else
+                        status_label:SetDesc("❌ Download failed")
+                        is_loading = false
+                    end
                 end)
-                if success and result then
-                    on_midi_data_received(result)
+            else
+                local file_path = "./MIDI/" .. txt
+                if not isfile(file_path) then
+                    status_label:SetDesc("❌ File not found: " .. txt)
+                    return
+                end
+                
+                local ok, data = _pcall(readfile, file_path)
+                if ok and data then
+                    status_label:SetDesc("⏳ Loading file...")
+                    load_midi_from_data(data, function(txt) 
+                        status_label:SetDesc(txt) 
+                        WindUI:Notify({
+                            Title = "MidiPlayer",
+                            Content = txt,
+                            Duration = 10,
+                            Icon = "bird",
+                        })
+                    end)
                 else
-                    loading_overlay.Visible = false
-                    filename_box.Text = "Download failed"
+                    status_label:SetDesc("❌ Failed to read file: " .. txt)
+                end
+            end
+        end
+    })
+
+    MainTab:Button({
+        Title = "Refresh File List",
+        Callback = function()
+            list_midi_files()
+            local vals = {}
+            for _, f in ipairs(midi_files) do table.insert(vals, f) end
+            file_dropdown:Refresh(vals)
+            status_label:SetDesc("🔄 Found " .. #midi_files .. " files")
+        end
+    })
+
+    MainTab:Button({
+        Title = "Play",
+        Callback = function()
+            if not midi_loaded then 
+                status_label:SetDesc("❌ No MIDI loaded")
+                return 
+            end
+            if paused and pause_position > 0 then
+                resume_playback()
+                status_label:SetDesc("▶️ Resumed")
+            elseif paused and pause_position == 0 then
+                start_playback(events, tempo_events)
+                status_label:SetDesc("▶️ Playing")
+            else
+                status_label:SetDesc("ℹ️ Already playing")
+            end
+        end
+    })
+
+    MainTab:Button({
+        Title = "Pause",
+        Callback = function()
+            if paused then
+                resume_playback()
+                status_label:SetDesc("▶️ Resumed")
+            else
+                pause_playback()
+                status_label:SetDesc("⏸️ Paused")
+            end
+        end
+    })
+
+    MainTab:Button({
+        Title = "Stop",
+        Callback = function() 
+            stop_playback()
+            status_label:SetDesc("⏹️ Stopped")
+        end
+    })
+
+    local last_played_change = 0
+    local was_playing_before_played = false
+
+    played_slider_ref = MainTab:Slider({
+        Title = "Played Time (s)",
+        Step = 0.01,
+        Value = { Min = 0, Max = 1, Default = 0 },
+        Callback = function(v)
+            if ignore_played_slider_callback then return end
+            
+            if not midi_loaded or total_duration == 0 then return end
+
+            if not paused and not was_playing_before_played then
+                was_playing_before_played = true
+                pause_playback()
+            end
+
+            last_played_change = os.clock()
+            local sec = v
+            if total_duration > 0 then
+                local ratio = _math.clamp(sec / total_duration, 0, 1)
+                seek_to_position(ratio)
+                status_label:SetDesc("⏩ Seek: " .. string.format("%.3f", sec) .. "s / " .. string.format("%.3f", total_duration) .. "s")
+            end
+
+            _task.spawn(function()
+                _task.wait(0.28)
+                if os.clock() - last_played_change >= 0.28 then
+                    if was_playing_before_played then
+                        resume_playback()
+                        was_playing_before_played = false
+                    end
                 end
             end)
-        else
-            filename_box.Text = "File not found"
+        end
+    })
+
+    local last_speed_change = 0
+    local was_playing_before_speed = false
+    local speed_slider_ref
+
+    speed_slider_ref = MainTab:Slider({
+        Title = "Playback Speed (%)",
+        Step = 0.1,
+        Value = { Min = 50, Max = 200, Default = _math.floor(playback_speed * 100) },
+        Callback = function(v)
+            if ignore_speed_slider_callback then return end
+            
+            if not paused and not was_playing_before_speed then
+                was_playing_before_speed = true
+                pause_playback()
+            end
+
+            last_speed_change = os.clock()
+            local oldpos = get_current_playback_position()
+            playback_speed = _math.clamp(v / 100, 0.5, 2.0)
+            pause_position = oldpos
+
+            _task.spawn(function()
+                _task.wait(0.28)
+                if os.clock() - last_speed_change >= 0.28 then
+                    if was_playing_before_speed then
+                        resume_playback()
+                        was_playing_before_speed = false
+                    end
+                end
+            end)
+        end
+    })
+
+    SettingsTab:Toggle({
+        Title = "DeBlack",
+        Desc = "If the MIDI file is large, use this",
+        Value = deblack_enabled,
+        Callback = function(v) 
+            deblack_enabled = v
+            WindUI:Notify({
+                Title = "MidiPlayer",
+                Content = (deblack_enabled and "🔧 Deblack ON" or "🔧 Deblack OFF"),
+                Duration = 3,
+                Icon = "bird",
+            })
+        end
+    })
+
+    SettingsTab:Slider({
+        Title = "DeBlack Level",
+        Step = 1,
+        Value = { Min = 0, Max = 127, Default = deblack_level },
+        Callback = function(v) 
+            deblack_level = _math.clamp(_math.floor(v), 0, 127)
+        end
+    })
+
+    SettingsTab:Toggle({
+        Title = "Auto Sustain",
+        Value = auto_sustain_enabled,
+        Callback = function(v) 
+            auto_sustain_enabled = v
+            WindUI:Notify({
+                Title = "MidiPlayer",
+                Content = (auto_sustain_enabled and "🔧 AutoSustain ON" or "🔧 AutoSustain OFF"),
+                Duration = 3,
+                Icon = "bird",
+            })
+        end
+    })
+
+    SettingsTab:Toggle({
+        Title = "88 Key",
+        Value = key88_enabled,
+        Callback = function(v) 
+            key88_enabled = v
+            WindUI:Notify({
+                Title = "MidiPlayer",
+                Content = (key88_enabled and "🔧 88 Key ON" or "🔧 88 Key OFF"),
+                Duration = 3,
+                Icon = "bird",
+            })
+        end
+    })
+
+    SettingsTab:Toggle({
+        Title = "Force Note-Off",
+        Value = no_note_off_enabled,
+        Callback = function(v) 
+            no_note_off_enabled = v
+            if v then release_all_keys() end
+            WindUI:Notify({
+                Title = "MidiPlayer",
+                Content = (no_note_off_enabled and "🔧 Force NoteOff ON" or "🔧 NoteOff OFF"),
+                Duration = 3,
+                Icon = "bird",
+            })
+        end
+    })
+
+    SettingsTab:Toggle({
+        Title = "Human Player",
+        Value = random_note_enabled,
+        Callback = function(v) 
+            random_note_enabled = v
+            WindUI:Notify({
+                Title = "MidiPlayer",
+                Content = (random_note_enabled and "🔧 Human Player ON" or "🔧 Human Player OFF"),
+                Duration = 3,
+                Icon = "bird",
+            })
+        end
+    })
+
+    run_service.RenderStepped:Connect(function()
+        play_realtime_events()
+
+        if midi_loaded and total_duration and total_duration > 0 then
+            local elapsed = get_current_playback_position()
+            if played_slider_ref then
+                _pcall(function()
+                    ignore_played_slider_callback = true
+                    played_slider_ref:Set(tonumber(elapsed))
+                    ignore_played_slider_callback = false
+                end)
+            end
+        end
+        
+        if speed_slider_ref then
+            local current_speed = _math.floor(playback_speed * 100)
+            _pcall(function() 
+                ignore_speed_slider_callback = true
+                speed_slider_ref:Set(current_speed)
+                ignore_speed_slider_callback = false
+            end)
+        end
+    end)
+
+    Window:SetToggleKey(Enum.KeyCode.RightControl)
+    Window:ToggleTransparency(true)
+    Window:SelectTab(1)
+    status_label:SetDesc("✅ Ready")
+end)
+
+run(function()
+    if not getgenv().Bypassed then
+        getgenv().Bypassed = true
+        local ok, v_u_1 = _pcall(function() return require(Services.ReplicatedStorage.Packages.Knit) end)
+        if ok and v_u_1 then
+            v_u_1.OnStart():catch(warn):andThen(function()
+                local v_u_3 = v_u_1.GetService("DetectionService")
+                while true do
+                    v_u_3.WindowFocused:Fire(true)
+                    _task.wait(1)
+                end
+            end)
+            WindUI:Notify({
+                Title = "MidiPlayer",
+                Content = "🛡️ AntiAfk Bypassed!",
+                Duration = 3,
+                Icon = "bird",
+            })
         end
     end
 end)
-
-play_button.MouseButton1Click:Connect(function()
-    if paused then
-        resume_playback()
-    else
-        if #events > 0 then
-            start_playback(events, tempo_events)
-        end
-    end
-end)
-
-pause_button.MouseButton1Click:Connect(function()
-    if paused then
-        resume_playback()
-    else
-        pause_playback()
-    end
-end)
-
-stop_button.MouseButton1Click:Connect(function()
-    stop_playback()
-    handle.Position = UDim2.new(0, -8, 0.5, -12)
-    update_time_label()
-    midi_loaded = false
-    update_deblack_button_state()
-end)
-
-list_button.MouseButton1Click:Connect(function()
-    file_list_frame.Visible = not file_list_frame.Visible
-    if file_list_frame.Visible then
-        populate_file_list()
-    end
-end)
-
-uis.InputBegan:Connect(function(input, game_processed)
-    if not game_processed and input.KeyCode == Enum.KeyCode.RightControl then
-        screen_gui.Enabled = not screen_gui.Enabled
-    end
-end)
-
-update_deblack_button_state()
-disableAutoLocalize(screen_gui)
