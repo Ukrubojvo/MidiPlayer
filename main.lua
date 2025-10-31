@@ -681,7 +681,7 @@ run(function()
             Anonymous = false,
             Callback = function()
                 Anonymous = not Anonymous
-                Window.Icon:SetAnonymous(Anonymous)
+                Window:SetAnonymous(Anonymous)
             end,
         },
     })
