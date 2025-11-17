@@ -54,7 +54,7 @@ local players = Services.Players
 local player = players.LocalPlayer
 
 local ProtectGui = protectgui or (syn and syn.protect_gui) or function() end
-local GUIParent = gethui and gethui() or game.CoreGui
+local GUIParent = gethui and gethui() or player.PlayerGui
 
 local key_map = {
     [21] = {keycode = Enum.KeyCode.One, ctrl = true},
