@@ -1,5 +1,6 @@
 -- MADE BY .antilua.
 -- OPTIMIZED VERSION
+
 VERSION="1.7.3"
 assert(isfolder and makefolder, "Unable to create folder")
 local _xpcall, _pcall, _task, _math = xpcall, pcall, task, math
