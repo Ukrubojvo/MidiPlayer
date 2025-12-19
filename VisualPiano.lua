@@ -1,6 +1,6 @@
--- MADE BY .antilua. and .dayun. (discord name)
+-- MADE BY .antilua.
 -- OPTIMIZED VERSION
-
+VERSION="1.7.3"
 assert(isfolder and makefolder, "Unable to create folder")
 local _xpcall, _pcall, _task, _math = xpcall, pcall, task, math
 if not isfolder("MIDI") then
@@ -122,7 +122,7 @@ local key_map = {
 local PianoController
 local events = {}
 local tempo_events = {}
-local sustain = false
+local sustain = true
 local key88_enabled = true
 local auto_sustain_enabled = true
 local auto_velocity_enabled = true
@@ -474,20 +474,22 @@ local function parse_midi_improved(data, loading_label)
 end
 
 local function release_all_keys()
-	for _, k in pairs(active_notes) do
-		PianoController:ReleaseClientKey(k.keycode)
-	end
-	if ctrl then
-		PianoController:ReleaseClientKey(Enum.KeyCode.LeftControl)
-		ctrl = false
-	end
-	if shift then
-		PianoController:ReleaseClientKey(Enum.KeyCode.LeftShift)
-		shift = false
-	end
-	if sustain then
-		PianoController:ReleaseClientKey(Enum.KeyCode.Space)
-		sustain = false
+	if PianoController then
+		for _, k in pairs(active_notes) do
+			PianoController:ReleaseClientKey(k.keycode)
+		end
+		if ctrl then
+			PianoController:ReleaseClientKey(Enum.KeyCode.LeftControl)
+			ctrl = false
+		end
+		if shift then
+			PianoController:ReleaseClientKey(Enum.KeyCode.LeftShift)
+			shift = false
+		end
+		if sustain then
+			PianoController:ReleaseClientKey(Enum.KeyCode.Space)
+			sustain = false
+		end
 	end
 	active_notes = {}
 end
@@ -539,35 +541,57 @@ local function play_realtime_events()
                         end
                     end
                     
-                    local normalized_velocity = _math.clamp(ev.vel / 127, 0, 1)
+                    local velocity = ev.vel
                     _pcall(function()
-                        if PianoController.ChangeVelocity and auto_velocity_enabled then
-                            PianoController:ChangeVelocity(normalized_velocity, true)
+                        if PianoController.SetVelocity and auto_velocity_enabled then
+                            PianoController:SetVelocity(velocity)
                         end
                     end)
                     
                     local noteIndex = ev.note
-                    if noteIndex then
-                        PianoController:PressClientKey(k.keycode, noteIndex - 35, nil, nil, nil, nil, nil, nil)
-                        active_notes[ev.note] = k
-                        
-                        if no_note_off_enabled then
+					if noteIndex then
+						local keycode_value = k.keycode
+						if typeof(keycode_value) == "EnumItem" then
+							keycode_value = keycode_value.Value
+						end
+						
+						PianoController:PressClientKey(
+							keycode_value,
+							noteIndex - 20,
+							nil,
+							nil,
+							nil,
+							nil,
+							nil
+						)
+						
+						active_notes[ev.note] = k
+						
+						if no_note_off_enabled then
 							local delta = random_note_enabled and (_math.random(1, 10) * 0.01) or 0.05
-                            task.delay(delta, function()
+							task.delay(delta, function()
 								local k = active_notes[ev.note]
 								if k then
-									PianoController:ReleaseClientKey(k.keycode)
+									local release_keycode = k.keycode
+									if typeof(release_keycode) == "EnumItem" then
+										release_keycode = release_keycode.Value
+									end
+									PianoController:ReleaseClientKey(release_keycode)
 									active_notes[ev.note] = nil
 								end
 							end)
-                        end
-                    end
+						end
+					end
 				end
 			elseif ev.type == "off" then
 				if not no_note_off_enabled then
 					local k = active_notes[ev.note]
 					if k then
-						PianoController:ReleaseClientKey(k.keycode)
+						local keycode_value = k.keycode
+						if typeof(keycode_value) == "EnumItem" then
+							keycode_value = keycode_value.Value
+						end
+						PianoController:ReleaseClientKey(keycode_value)
 						active_notes[ev.note] = nil
 					end
 				end
@@ -575,12 +599,21 @@ local function play_realtime_events()
 				local s = ev.vel >= 64
 				if auto_sustain_enabled then
 					if s ~= sustain then
-						PianoController:ToggleSustain(s)
+						_pcall(function()
+							if PianoController then
+								PianoController:ToggleSustain(s)
+							end
+						end)
 						sustain = s
 					end
 				else
 					if not sustain then
 						sustain = true
+						_pcall(function()
+							if PianoController then
+								PianoController:ToggleSustain(true)
+							end
+						end)
 					end
 				end
 			end
@@ -625,6 +658,14 @@ local function start_playback(parsed_events, tempo_changes)
 	start_time = os.clock()
 	next_event_index = 1
 	pause_position = 0
+	if not auto_sustain_enabled then
+        sustain = true
+        _pcall(function()
+            if PianoController then
+                PianoController:ToggleSustain(true)
+            end
+        end)
+    end
 	release_all_keys()
 	paused = false
 	midi_loaded = true
@@ -740,6 +781,11 @@ run(function()
 			end,
 		},
 	})
+	Window:Tag({
+        Title = "v" .. VERSION,
+        Icon = "github",
+        Color = Color3.fromHex("#1c1c1c")
+    })
 	Window:OnDestroy(function()
 		shared.AntiLuaLoading = false
 		stop_playback()
@@ -1014,6 +1060,14 @@ run(function()
 		Value = auto_sustain_enabled,
 		Callback = function(v)
 			auto_sustain_enabled = v
+			if not auto_sustain_enabled then
+				sustain = true
+				_pcall(function()
+					if PianoController then
+						PianoController:ToggleSustain(true)
+					end
+				end)
+			end
 			WindUI:Notify({
 				Title = "MidiPlayer",
 				Content = (auto_sustain_enabled and "🔧 AutoSustain ON" or "🔧 AutoSustain OFF"),
