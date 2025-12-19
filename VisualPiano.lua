@@ -1,6 +1,5 @@
 -- MADE BY .antilua.
 -- OPTIMIZED VERSION
-
 VERSION="1.7.3"
 assert(isfolder and makefolder, "Unable to create folder")
 local _xpcall, _pcall, _task, _math = xpcall, pcall, task, math
@@ -477,18 +476,18 @@ end
 local function release_all_keys()
 	if PianoController then
 		for _, k in pairs(active_notes) do
-			PianoController:ReleaseClientKey(k.keycode)
+			PianoController:ReleaseClientKey(k.keycode.Value)
 		end
 		if ctrl then
-			PianoController:ReleaseClientKey(Enum.KeyCode.LeftControl)
+			PianoController:ReleaseClientKey(Enum.KeyCode.LeftControl.Value)
 			ctrl = false
 		end
 		if shift then
-			PianoController:ReleaseClientKey(Enum.KeyCode.LeftShift)
+			PianoController:ReleaseClientKey(Enum.KeyCode.LeftShift.Value)
 			shift = false
 		end
 		if sustain then
-			PianoController:ReleaseClientKey(Enum.KeyCode.Space)
+			PianoController:ReleaseClientKey(Enum.KeyCode.Space.Value)
 			sustain = false
 		end
 	end
