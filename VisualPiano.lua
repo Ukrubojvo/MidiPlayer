@@ -568,7 +568,7 @@ local function play_realtime_events()
 						active_notes[ev.note] = k
 						
 						if no_note_off_enabled then
-							local delta = random_note_enabled and (_math.random(1, 50) * 0.01) or 0.05
+							local delta = random_note_enabled and (_math.random(1, 30) * 0.01) or 0.05
 							task.delay(delta, function()
 								local k = active_notes[ev.note]
 								if k then
