@@ -1199,11 +1199,11 @@ run(function()
 		Step = 0.001,
 		Value = {
 			Min = 0,
-			Max = 1,
+			Max = 2,
 			Default = FastNoteOffDelay
 		},
 		Callback = function(v)
-			FastNoteOffDelay = _math.clamp(v, 0, 1)
+			FastNoteOffDelay = v
 		end
 	})
 	SettingsTab:Toggle({
