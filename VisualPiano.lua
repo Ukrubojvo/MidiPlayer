@@ -1,6 +1,6 @@
 -- MADE BY .antilua.
 -- OPTIMIZED VERSION
-VERSION="1.7.4"
+VERSION="1.7.5"
 assert(isfolder and makefolder, "Unable to create folder")
 local _xpcall, _pcall, _task, _math = xpcall, pcall, task, math
 if not isfolder("MIDI") then
@@ -8,8 +8,7 @@ if not isfolder("MIDI") then
 	writefile("./MIDI/Summer.mid", game:HttpGetAsync("https://github.com/Ukrubojvo/api/raw/refs/heads/main/Summer.mid"))
 end
 
-if game.GameId ~= 1953956112 then return end
-
+if game.GameId ~= 1953956112 then return end -- Visual Pianos GameID
 if not shared.AntiLuaLoading then
 	shared.AntiLuaLoading = true
 else
@@ -821,6 +820,75 @@ run(function()
 			url_input_value = val
 		end
 	})
+	MainTab:Button({
+		Title = "Download",
+		Callback = function()
+			local txt = url_input_value or ""
+			if not string.match(txt, "^https?://") then
+				status_label:SetDesc("❌ Invalid URL")
+				return
+			end
+
+			local clean = string.match(txt, "([^%?]+)")
+			if not clean then
+				status_label:SetDesc("❌ Invalid URL")
+				return
+			end
+
+			local filename = string.match(clean, ".+/([^/]+)$")
+			if not filename then
+				status_label:SetDesc("❌ Cannot extract filename")
+				return
+			end
+
+			local lower = string.lower(filename)
+			if not (string.sub(lower, -4) == ".mid" or string.sub(lower, -5) == ".midi") then
+				status_label:SetDesc("❌ Not a MIDI file")
+				return
+			end
+
+			filename = string.gsub(filename, "_", " ")
+			if not isfolder("./MIDI") then
+				makefolder("./MIDI")
+			end
+
+			local savePath = "./MIDI/" .. filename
+			status_label:SetDesc("⏳ Downloading...")
+
+			_task.spawn(function()
+				local ok, data = _pcall(function()
+					return game:HttpGet(txt)
+				end)
+
+				if not ok or not data then
+					status_label:SetDesc("❌ Download failed")
+					return
+				end
+
+				if string.sub(data, 1, 4) ~= "MThd" then
+					status_label:SetDesc("❌ Invalid MIDI header")
+					WindUI:Notify({
+						Title = "MidiPlayer",
+						Content = "File is not a valid MIDI (MThd missing)",
+						Duration = 4,
+						Icon = "bird",
+					})
+					return
+				end
+
+				writefile(savePath, data)
+				status_label:SetDesc("✅ Saved: " .. filename)
+
+				WindUI:Notify({
+					Title = "MidiPlayer",
+					Content = "Saved as " .. filename,
+					Duration = 4,
+					Icon = "bird",
+				})
+			end)
+		end
+	})
+
 	local file_dropdown = MainTab:Dropdown({
 		Title = "MIDI Files",
 		Desc = "Choose from ./MIDI",
