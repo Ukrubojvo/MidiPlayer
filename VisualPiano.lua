@@ -130,6 +130,8 @@ local random_note_enabled = false
 local deblack_enabled = false
 local deblack_level = 65
 local deblack_strict = true
+local FastNoteOff = false
+local FastNoteOffDelay = 0.02
 local shift = false
 local ctrl = false
 local active_notes = {}
@@ -509,6 +511,14 @@ local function play_realtime_events()
 	while next_event_index <= #events do
 		local ev = events[next_event_index]
 		local event_time = ev.abs_time
+		
+		if ev.type == "off" and FastNoteOff then
+			event_time = ev.abs_time - (FastNoteOffDelay or 0)
+			if event_time < 0 then
+				event_time = 0
+			end
+		end
+		
 		if ev.type == "on" and random_note_enabled then
 			local random_offset = _math.random(0, 5) * 0.01
 			event_time = ev.abs_time - random_offset
@@ -516,6 +526,7 @@ local function play_realtime_events()
 				event_time = 0
 			end
 		end
+		
 		if event_time <= elapsed then
 			if ev.type == "on" then
 				local k = key_map[ev.note]
@@ -567,18 +578,15 @@ local function play_realtime_events()
 						active_notes[ev.note] = k
 						
 						if no_note_off_enabled then
-							local delta = random_note_enabled and (_math.random(1, 120) * 0.001) or 0.05
-							task.delay(delta, function()
-								local k = active_notes[ev.note]
-								if k then
-									local release_keycode = k.keycode
-									if typeof(release_keycode) == "EnumItem" then
-										release_keycode = release_keycode.Value
-									end
-									PianoController:ReleaseClientKey(release_keycode)
-									active_notes[ev.note] = nil
+							local k = active_notes[ev.note]
+							if k then
+								local release_keycode = k.keycode
+								if typeof(release_keycode) == "EnumItem" then
+									release_keycode = release_keycode.Value
 								end
-							end)
+								PianoController:ReleaseClientKey(release_keycode)
+								active_notes[ev.note] = nil
+							end
 						end
 					end
 				end
@@ -1168,6 +1176,34 @@ run(function()
 				Duration = 3,
 				Icon = "bird",
 			})
+		end
+	})
+	SettingsTab:Toggle({
+		Title = "Fast Note-Off",
+		Value = FastNoteOff,
+		Callback = function(v)
+			FastNoteOff = v
+			if v then
+				release_all_keys()
+			end
+			WindUI:Notify({
+				Title = "MidiPlayer",
+				Content = (FastNoteOff and "🔧 Fast NoteOff ON" or "🔧 Fast NoteOff OFF"),
+				Duration = 3,
+				Icon = "bird",
+			})
+		end
+	})
+	SettingsTab:Slider({
+		Title = "Fast Note-Off Delay (s)",
+		Step = 0.001,
+		Value = {
+			Min = 0,
+			Max = 1,
+			Default = FastNoteOffDelay
+		},
+		Callback = function(v)
+			FastNoteOffDelay = _math.clamp(v, 0, 1)
 		end
 	})
 	SettingsTab:Toggle({
