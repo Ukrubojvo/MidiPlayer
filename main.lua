@@ -160,303 +160,362 @@ local function read_var_int(data, offset)
 end
 
 local function calculate_realtime_position(ticks, ticks_per_beat, tempo_changes)
-    local current_tick = 0
-    local current_time_ms = 0
-    local current_tempo = 500000
-    
-    for i = 1, #tempo_changes do
-        local tempo_event = tempo_changes[i]
-        if tempo_event.tick <= ticks then
-            local tick_diff = tempo_event.tick - current_tick
-            current_time_ms = current_time_ms + (tick_diff * current_tempo / 1000) / ticks_per_beat
-            
-            current_tick = tempo_event.tick
-            current_tempo = tempo_event.tempo
-        else
-            break
-        end
-    end
-    
-    local remaining_ticks = ticks - current_tick
-    current_time_ms = current_time_ms + (remaining_ticks * current_tempo / 1000) / ticks_per_beat
-    
-    return current_time_ms / 1000
+	local current_tick = 0
+	local current_time_ms = 0
+	local current_tempo = 500000
+	for i = 1, #tempo_changes do
+		local tempo_event = tempo_changes[i]
+		if tempo_event.tick <= ticks then
+			local tick_diff = tempo_event.tick - current_tick
+			current_time_ms = current_time_ms + (tick_diff * current_tempo / 1000) / ticks_per_beat
+			current_tick = tempo_event.tick
+			current_tempo = tempo_event.tempo
+		else
+			break
+		end
+	end
+	local remaining_ticks = ticks - current_tick
+	current_time_ms = current_time_ms + (remaining_ticks * current_tempo / 1000) / ticks_per_beat
+	return current_time_ms / 1000
 end
 
 local function apply_deblack(parsed_events)
-    if not deblack_enabled then
-        return parsed_events
-    end
-
-    local note_on_times = {}
-    local last_note_off = {}
-    local keep_indexes = {}
-    local n = #parsed_events
-
-    for i = 1, n do
-        local note = parsed_events[i]
-        
-        if not note.abs_time or type(note.abs_time) ~= "number" then
-            keep_indexes[i] = true
-        elseif note.type == "control" then
-            keep_indexes[i] = true
-        elseif not note.channel or not note.note then
-            keep_indexes[i] = true
-        else
-            local key = tostring(note.channel) .. ":" .. tostring(note.note)
-            
-            if note.vel and note.vel > 0 then
-                local should_ignore = false
-
-                if deblack_strict then
-                    local prev_off = last_note_off[key]
-                    if prev_off and prev_off.t and prev_off.v and type(prev_off.t) == "number" then
-                        local dt = note.abs_time - prev_off.t
-                        local vel_diff = _math.abs(note.vel - prev_off.v)
-                        if dt < 0.035 and vel_diff < 7 then
-                            should_ignore = true
-                        end
-                    end
-                end
-
-                if not should_ignore then
-                    note_on_times[key] = { t = note.abs_time, idx = i, v = note.vel }
-                end
-            else
-                local on_data = note_on_times[key]
-                if on_data and on_data.t and on_data.v and type(on_data.t) == "number" then
-                    local dt = (note.abs_time - on_data.t) * 1000
-                    local vel = on_data.v
-
-                    last_note_off[key] = { t = note.abs_time, v = vel }
-                    note_on_times[key] = nil
-
-                    if not (vel <= (deblack_level) and dt < 20) then
-                        keep_indexes[on_data.idx] = true
-                        keep_indexes[i] = true
-                    end
-                else
-                    keep_indexes[i] = true
-                end
-            end
-        end
-    end
-
-    local filtered_events = {}
-    local filtered_count = 0
-    for i = 1, n do
-        if keep_indexes[i] then
-            filtered_count = filtered_count + 1
-            filtered_events[filtered_count] = parsed_events[i]
-        end
-    end
-
-    return filtered_events
+	if not deblack_enabled then
+		return parsed_events
+	end
+	local note_on_times = {}
+	local last_note_off = {}
+	local keep_indexes = {}
+	local n = #parsed_events
+	for i = 1, n do
+		local note = parsed_events[i]
+		if not note.abs_time or type(note.abs_time) ~= "number" then
+			keep_indexes[i] = true
+		elseif note.type == "control" then
+			keep_indexes[i] = true
+		elseif not note.channel or not note.note then
+			keep_indexes[i] = true
+		else
+			local key = tostring(note.channel) .. ":" .. tostring(note.note)
+			if note.vel and note.vel > 0 then
+				local should_ignore = false
+				if deblack_strict then
+					local prev_off = last_note_off[key]
+					if prev_off and prev_off.t and prev_off.v and type(prev_off.t) == "number" then
+						local dt = note.abs_time - prev_off.t
+						local vel_diff = _math.abs(note.vel - prev_off.v)
+						if dt < 0.035 and vel_diff < 7 then
+							should_ignore = true
+						end
+					end
+				end
+				if not should_ignore then
+					note_on_times[key] = {
+						t = note.abs_time,
+						idx = i,
+						v = note.vel
+					}
+				end
+			else
+				local on_data = note_on_times[key]
+				if on_data and on_data.t and on_data.v and type(on_data.t) == "number" then
+					local dt = (note.abs_time - on_data.t) * 1000
+					local vel = on_data.v
+					last_note_off[key] = {
+						t = note.abs_time,
+						v = vel
+					}
+					note_on_times[key] = nil
+					if not (vel <= (deblack_level) and dt < 20) then
+						keep_indexes[on_data.idx] = true
+						keep_indexes[i] = true
+					end
+				else
+					keep_indexes[i] = true
+				end
+			end
+		end
+	end
+	local filtered_events = {}
+	local filtered_count = 0
+	for i = 1, n do
+		if keep_indexes[i] then
+			filtered_count = filtered_count + 1
+			filtered_events[filtered_count] = parsed_events[i]
+		end
+	end
+	return filtered_events
 end
-
 local function parse_midi_improved(data, loading_label)
-    local buffer = data
-    local offset = 1
-    local track_end_offset = 0
-    local is_header_parsed = false
-    local ticks_per_beat = 0
-    local last_status_byte = nil
-    local track_time = 0
-    local note_on_stack = {}
-    local parsed_events = {}
-    local tempo_changes = {{tick = 0, tempo = 500000}}
-    local event_count = 0
-    local last_yield = os.clock()
-
-    while true do
-        if os.clock() - last_yield > 0.033 then
-            _task.wait()
-            last_yield = os.clock()
-            if loading_label and loading_label.Parent then
-                loading_label.Text = string.format("⏳ Parsing... %d events", event_count)
-            end
-        end
-
-        if not is_header_parsed then
-            if #buffer < 14 then break end
-            if string.sub(buffer, 1, 4) ~= 'MThd' then break end
-            ticks_per_beat = string.unpack(">H", buffer, 13)
-            offset = 15
-            is_header_parsed = true
-        end
-
-        if offset >= track_end_offset then
-            if #buffer - offset + 1 < 8 then break end
-            if string.sub(buffer, offset, offset + 3) ~= 'MTrk' then break end
-            offset = offset + 4
-            local track_length = string.unpack(">I4", buffer, offset)
-            offset = offset + 4
-            track_end_offset = offset + track_length - 1
-            last_status_byte = nil
-            track_time = 0
-            note_on_stack = {}
-        end
-
-        if offset > track_end_offset then break end
-
-        local delta, delta_bytes = read_var_int(buffer, offset)
-        offset = offset + delta_bytes
-        track_time = track_time + delta
-
-        local status
-        local status_byte = string.byte(buffer, offset)
-        if not status_byte then break end
-
-        if bit32.band(status_byte, 0x80) ~= 0 then
-            last_status_byte = status_byte
-            status = status_byte
-            offset = offset + 1
-        else
-            if last_status_byte == nil then break end
-            status = last_status_byte
-        end
-
-        local command = bit32.band(status, 0xF0)
-        local channel = bit32.band(status, 0x0F)
-
-        if command == 0x90 or command == 0x80 then
-            local note_number = string.byte(buffer, offset)
-            local velocity = string.byte(buffer, offset + 1)
-            if not note_number or not velocity then break end
-            offset = offset + 2
-
-            local is_on = command == 0x90 and velocity > 0
-            local key = tostring(note_number) .. ":" .. tostring(channel)
-
-            if is_on then
-                if note_on_stack[key] then
-                    local prev = note_on_stack[key]
-                    local length_ticks = track_time - prev.on_tick
-                    if length_ticks > 0 then
-                        local on_time = calculate_realtime_position(prev.on_tick, ticks_per_beat, tempo_changes)
-                        local off_time = calculate_realtime_position(track_time, ticks_per_beat, tempo_changes)
-                        event_count = event_count + 2
-                        parsed_events[event_count - 1] = {
-                            type = 'on',
-                            note = prev.note_name,
-                            vel = prev.velocity,
-                            channel = prev.channel,
-                            abs_time = on_time,
-                            tick = prev.on_tick
-                        }
-                        parsed_events[event_count] = {
-                            type = 'off',
-                            note = prev.note_name,
-                            channel = prev.channel,
-                            abs_time = off_time,
-                            tick = track_time
-                        }
-                    end
-                    note_on_stack[key] = nil
-                end
-                note_on_stack[key] = {
-                    on_tick = track_time,
-                    velocity = velocity,
-                    note_name = note_number,
-                    channel = channel
-                }
-            else
-                local prev = note_on_stack[key]
-                if prev then
-                    local length_ticks = track_time - prev.on_tick
-                    if length_ticks > 0 then
-                        local on_time = calculate_realtime_position(prev.on_tick, ticks_per_beat, tempo_changes)
-                        local off_time = calculate_realtime_position(track_time, ticks_per_beat, tempo_changes)
-                        event_count = event_count + 2
-                        parsed_events[event_count - 1] = {
-                            type = 'on',
-                            note = prev.note_name,
-                            vel = prev.velocity,
-                            channel = prev.channel,
-                            abs_time = on_time,
-                            tick = prev.on_tick
-                        }
-                        parsed_events[event_count] = {
-                            type = 'off',
-                            note = prev.note_name,
-                            channel = prev.channel,
-                            abs_time = off_time,
-                            tick = track_time
-                        }
-                    end
-                    note_on_stack[key] = nil
-                end
-            end
-        elseif command == 0xB0 then
-            local controller_type = string.byte(buffer, offset)
-            local value = string.byte(buffer, offset + 1)
-            if not controller_type or not value then break end
-            offset = offset + 2
-            
-            if controller_type == 64 then
-                local control_time = calculate_realtime_position(track_time, ticks_per_beat, tempo_changes)
-                event_count = event_count + 1
-                parsed_events[event_count] = {
-                    type = 'control',
-                    vel = value,
-                    abs_time = control_time,
-                    tick = track_time
-                }
-            end
-        elseif status == 0xFF then
-            local meta_type = string.byte(buffer, offset)
-            if not meta_type then break end
-            offset = offset + 1
-            
-            local length, length_bytes = read_var_int(buffer, offset)
-            offset = offset + length_bytes
-            
-            if meta_type == 0x51 and length == 3 then
-                local b1, b2, b3 = string.byte(buffer, offset, offset + 2)
-                if b1 and b2 and b3 then
-                    local micro_per_beat = b1 * 65536 + b2 * 256 + b3
-                    table.insert(tempo_changes, {tick = track_time, tempo = micro_per_beat})
-                end
-            end
-            offset = offset + length
-        else
-            local data_len = (command == 0xC0 or command == 0xD0) and 1 or 2
-            offset = offset + data_len
-        end
-
-        if offset > track_end_offset then
-            offset = track_end_offset + 1
-        end
-    end
-
-    for key, prev in pairs(note_on_stack) do
-        local on_time = calculate_realtime_position(prev.on_tick, ticks_per_beat, tempo_changes)
-        event_count = event_count + 1
-        parsed_events[event_count] = {
-            type = 'on',
-            note = prev.note_name,
-            vel = prev.velocity,
-            channel = prev.channel,
-            abs_time = on_time,
-            tick = prev.on_tick
-        }
-    end
-
-    if loading_label and loading_label.Parent then
-        loading_label.Text = "⏳ Sorting events..."
-    end
-    _task.wait()
-    
-    table.sort(parsed_events, function(a, b) return a.abs_time < b.abs_time end)
-    
-    if loading_label and loading_label.Parent then
-        loading_label.Text = "⏳ Applying deblack..."
-    end
-    _task.wait()
-    
-    parsed_events = apply_deblack(parsed_events)
-    
-    return parsed_events, tempo_changes
+	local buffer = data
+	local offset = 1
+	local is_header_parsed = false
+	local ticks_per_beat = 0
+	local tempo_changes = {
+		{
+			tick = 0,
+			tempo = 500000
+		}
+	}
+	local all_parsed_events = {}
+	local event_count = 0
+	local last_yield = os.clock()
+	
+	-- Parse header
+	if #buffer < 14 then
+		return {}, tempo_changes
+	end
+	if string.sub(buffer, 1, 4) ~= 'MThd' then
+		return {}, tempo_changes
+	end
+	ticks_per_beat = string.unpack(">H", buffer, 13)
+	offset = 15
+	
+	-- Parse each track independently
+	while offset < #buffer do
+		if os.clock() - last_yield > 0.033 then
+			_task.wait()
+			last_yield = os.clock()
+			if loading_label and loading_label.Parent then
+				loading_label.Text = string.format("⏳ Parsing... %d events", event_count)
+			end
+		end
+		
+		-- Check for track header
+		if #buffer - offset + 1 < 8 then
+			break
+		end
+		if string.sub(buffer, offset, offset + 3) ~= 'MTrk' then
+			break
+		end
+		
+		offset = offset + 4
+		local track_length = string.unpack(">I4", buffer, offset)
+		offset = offset + 4
+		local track_end_offset = offset + track_length
+		
+		-- Track-specific variables
+		local last_status_byte = nil
+		local track_time = 0
+		local note_on_stack = {}
+		
+		-- Parse events in this track
+		while offset < track_end_offset do
+			if os.clock() - last_yield > 0.033 then
+				_task.wait()
+				last_yield = os.clock()
+				if loading_label and loading_label.Parent then
+					loading_label.Text = string.format("⏳ Parsing... %d events", event_count)
+				end
+			end
+			
+			-- Read delta time
+			local delta, delta_bytes = read_var_int(buffer, offset)
+			offset = offset + delta_bytes
+			track_time = track_time + delta
+			
+			-- Read status byte
+			local status
+			local status_byte = string.byte(buffer, offset)
+			if not status_byte then
+				break
+			end
+			
+			if bit32.band(status_byte, 128) ~= 0 then
+				last_status_byte = status_byte
+				status = status_byte
+				offset = offset + 1
+			else
+				if last_status_byte == nil then
+					break
+				end
+				status = last_status_byte
+			end
+			
+			local command = bit32.band(status, 240)
+			local channel = bit32.band(status, 15)
+			
+			-- Note On/Off
+			if command == 144 or command == 128 then
+				local note_number = string.byte(buffer, offset)
+				local velocity = string.byte(buffer, offset + 1)
+				if not note_number or not velocity then
+					break
+				end
+				offset = offset + 2
+				
+				local is_on = command == 144 and velocity > 0
+				local key = tostring(note_number) .. ":" .. tostring(channel)
+				
+				if is_on then
+					-- If there's already a note on for this key, close it first
+					if note_on_stack[key] then
+						local prev = note_on_stack[key]
+						local length_ticks = track_time - prev.on_tick
+						if length_ticks > 0 then
+							local on_time = calculate_realtime_position(prev.on_tick, ticks_per_beat, tempo_changes)
+							local off_time = calculate_realtime_position(track_time, ticks_per_beat, tempo_changes)
+							event_count = event_count + 2
+							all_parsed_events[event_count - 1] = {
+								type = 'on',
+								note = prev.note_name,
+								vel = prev.velocity,
+								channel = prev.channel,
+								abs_time = on_time,
+								tick = prev.on_tick
+							}
+							all_parsed_events[event_count] = {
+								type = 'off',
+								note = prev.note_name,
+								channel = prev.channel,
+								abs_time = off_time,
+								tick = track_time
+							}
+						end
+					end
+					
+					note_on_stack[key] = {
+						on_tick = track_time,
+						velocity = velocity,
+						note_name = note_number,
+						channel = channel
+					}
+				else
+					-- Note off
+					local prev = note_on_stack[key]
+					if prev then
+						local length_ticks = track_time - prev.on_tick
+						if length_ticks > 0 then
+							local on_time = calculate_realtime_position(prev.on_tick, ticks_per_beat, tempo_changes)
+							local off_time = calculate_realtime_position(track_time, ticks_per_beat, tempo_changes)
+							event_count = event_count + 2
+							all_parsed_events[event_count - 1] = {
+								type = 'on',
+								note = prev.note_name,
+								vel = prev.velocity,
+								channel = prev.channel,
+								abs_time = on_time,
+								tick = prev.on_tick
+							}
+							all_parsed_events[event_count] = {
+								type = 'off',
+								note = prev.note_name,
+								channel = prev.channel,
+								abs_time = off_time,
+								tick = track_time
+							}
+						end
+						note_on_stack[key] = nil
+					end
+				end
+			
+			-- Control Change (Sustain)
+			elseif command == 176 then
+				local controller_type = string.byte(buffer, offset)
+				local value = string.byte(buffer, offset + 1)
+				if not controller_type or not value then
+					break
+				end
+				offset = offset + 2
+				
+				if controller_type == 64 then
+					local control_time = calculate_realtime_position(track_time, ticks_per_beat, tempo_changes)
+					event_count = event_count + 1
+					all_parsed_events[event_count] = {
+						type = 'control',
+						vel = value,
+						abs_time = control_time,
+						tick = track_time
+					}
+				end
+			
+			elseif status == 0xF0 or status == 0xF7 then
+				-- Read SysEx data until we find 0xF7 or another status byte
+				while offset <= track_end_offset do
+					local byte = string.byte(buffer, offset)
+					if not byte then
+						break
+					end
+					offset = offset + 1
+					
+					-- End of SysEx
+					if byte == 0xF7 then
+						break
+					end
+					-- Another status byte (some files don't have 0xF7)
+					if bit32.band(byte, 0x80) ~= 0 and byte ~= 0xF0 then
+						offset = offset - 1
+						break
+					end
+				end
+				-- Don't update last_status_byte for SysEx
+				last_status_byte = nil
+			
+			-- Meta Event
+			elseif status == 255 then
+				local meta_type = string.byte(buffer, offset)
+				if not meta_type then
+					break
+				end
+				offset = offset + 1
+				local length, length_bytes = read_var_int(buffer, offset)
+				offset = offset + length_bytes
+				
+				-- Tempo change
+				if meta_type == 81 and length == 3 then
+					local b1, b2, b3 = string.byte(buffer, offset, offset + 2)
+					if b1 and b2 and b3 then
+						local micro_per_beat = b1 * 65536 + b2 * 256 + b3
+						table.insert(tempo_changes, {
+							tick = track_time,
+							tempo = micro_per_beat
+						})
+					end
+				end
+				offset = offset + length
+			
+			-- Other events
+			else
+				local data_len = (command == 192 or command == 208) and 1 or 2
+				offset = offset + data_len
+			end
+		end
+		
+		-- Close any remaining open notes in this track
+		for key, prev in pairs(note_on_stack) do
+			local on_time = calculate_realtime_position(prev.on_tick, ticks_per_beat, tempo_changes)
+			event_count = event_count + 1
+			all_parsed_events[event_count] = {
+				type = 'on',
+				note = prev.note_name,
+				vel = prev.velocity,
+				channel = prev.channel,
+				abs_time = on_time,
+				tick = prev.on_tick
+			}
+		end
+		
+		-- Move to next track
+		offset = track_end_offset
+	end
+	
+	if loading_label and loading_label.Parent then
+		loading_label.Text = "⏳ Sorting events..."
+	end
+	_task.wait()
+	
+	table.sort(all_parsed_events, function(a, b)
+		return a.abs_time < b.abs_time
+	end)
+	
+	if loading_label and loading_label.Parent then
+		loading_label.Text = "⏳ Applying deblack..."
+	end
+	_task.wait()
+	
+	all_parsed_events = apply_deblack(all_parsed_events)
+	
+	return all_parsed_events, tempo_changes
 end
 
 local function release_all_keys()
