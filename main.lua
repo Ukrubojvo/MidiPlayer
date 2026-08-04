@@ -32,6 +32,18 @@ run(function()
     end
 end)
 
+WindUI.Creator.AddIcons("solar", {
+    ["CheckSquareBold"] = "rbxassetid://132438947521974",
+    ["CursorSquareBold"] = "rbxassetid://120306472146156",
+    ["FileTextBold"] = "rbxassetid://89294979831077",
+    ["FolderWithFilesBold"] = "rbxassetid://74631950400584",
+    ["HamburgerMenuBold"] = "rbxassetid://134384554225463",
+    ["Home2Bold"] = "rbxassetid://92190299966310",
+    ["InfoSquareBold"] = "rbxassetid://119096461016615",
+    ["PasswordMinimalisticInputBold"] = "rbxassetid://109919668957167",
+    ["SolarSquareTransferHorizontalBold"] = "rbxassetid://125444491429160",
+})--]]
+
 local function missing(t, f, fallback)
     if type(f) == t then return f end
     return fallback
@@ -729,7 +741,8 @@ run(function()
     local Window
     Window = WindUI:CreateWindow({
         Title = "MIDI Player",
-        Author = "Made by .antilua.",
+		Icon = "solar:folder-2-bold-duotone",
+        --Author = "Made by .antilua.",
         Folder = "AntiLua",
         NewElements = true,
         HideSearchBar = false,
@@ -752,6 +765,15 @@ run(function()
 			ButtonsType = "Mac", -- Default or Mac
 		},
     })
+
+	do
+		Window:Tag({
+			Title = "v" .. WindUI.Version,
+			Icon = "github",
+			Color = Color3.fromHex("#1c1c1c"),
+			Border = true,
+		})
+	end
 
     Window:OnDestroy(function()
         shared.AntiLuaLoading = false
