@@ -28,7 +28,7 @@ run(function()
     if ok and res then
         WindUI = res
     else
-        WindUI = loadstring(game:HttpGetAsync("https://github.com/Footagesus/WindUI/releases/latest/download/main.lua"))()
+        WindUI = loadstring(game:HttpGet("https://raw.githubusercontent.com/Footagesus/WindUI/main/dist/main.lua"))()
     end
 end)
 
@@ -730,19 +730,27 @@ run(function()
     Window = WindUI:CreateWindow({
         Title = "MIDI Player",
         Author = "Made by .antilua.",
-        Size = UDim2.fromOffset(600, 260),
-        SideBarWidth = 150,
         Folder = "AntiLua",
         NewElements = true,
-        HideSearchBar = true,
-        User = {
-            Enabled = true,
-            Anonymous = false,
-            Callback = function()
-                Anonymous = not Anonymous
-                Window:SetAnonymous(Anonymous)
-            end,
-        },
+        HideSearchBar = false,
+        OpenButton = {
+			Title = "Open AntiLua UI", -- can be changed
+			CornerRadius = UDim.new(1, 0), -- fully rounded
+			StrokeThickness = 3, -- removing outline
+			Enabled = true, -- enable or disable openbutton
+			Draggable = true,
+			OnlyMobile = false,
+			Scale = 0.5,
+	
+			Color = ColorSequence.new( -- gradient
+				Color3.fromHex("#30FF6A"),
+				Color3.fromHex("#e7ff2f")
+			),
+		},
+		Topbar = {
+			Height = 44,
+			ButtonsType = "Mac", -- Default or Mac
+		},
     })
 
     Window:OnDestroy(function()
@@ -1091,7 +1099,6 @@ run(function()
     end)
 
     Window:SetToggleKey(Enum.KeyCode.RightControl)
-    Window:ToggleTransparency(true)
     Window:SelectTab(1)
     status_label:SetDesc("✅ Ready")
 end)
